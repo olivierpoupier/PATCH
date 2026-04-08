@@ -12,31 +12,55 @@ import (
 var (
 	tabNames = []string{"USB", "Bluetooth"}
 
-	tabContents = []string{
-		"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod\ntempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim\nveniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea\ncommodo consequat. Duis aute irure dolor in reprehenderit in voluptate\nvelit esse cillum dolore eu fugiat nulla pariatur.",
-		"Sed ut perspiciatis unde omnis iste natus error sit voluptatem\naccusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae\nab illo inventore veritatis et quasi architecto beatae vitae dicta sunt\nexplicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut\nodit aut fugit, sed quia consequuntur magni dolores eos.",
-	}
+	usbContent = "USB device management coming soon..."
 
 	activeColor   = lipgloss.Color("#04B575")
 	inactiveColor = lipgloss.Color("#888888")
 )
 
 type model struct {
-	activeTab int
-	width     int
-	height    int
+	activeTab    int
+	focusContent bool
+	width        int
+	height       int
+
+	bluetoothTab bluetoothModel
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return m.bluetoothTab.Init()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		if m.focusContent {
+			if msg.String() == "esc" {
+				var cmd tea.Cmd
+				m.bluetoothTab, cmd = m.bluetoothTab.SetFocused(false)
+				m.focusContent = false
+				return m, cmd
+			}
+			// Delegate to the active tab
+			if m.activeTab == 1 {
+				var cmd tea.Cmd
+				m.bluetoothTab, cmd = m.bluetoothTab.Update(msg)
+				return m, cmd
+			}
+			return m, nil
+		}
+
+		// Tab bar navigation
+		switch msg.String() {
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % len(tabNames)
 		case "shift+tab", "left", "h":
@@ -45,12 +69,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = 0
 		case "2":
 			m.activeTab = 1
+		case "enter":
+			m.focusContent = true
+			if m.activeTab == 1 {
+				var cmd tea.Cmd
+				m.bluetoothTab, cmd = m.bluetoothTab.SetFocused(true)
+				return m, cmd
+			}
 		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		return m, nil
 	}
-	return m, nil
+
+	// Always let bluetooth model handle its own async messages
+	var cmd tea.Cmd
+	m.bluetoothTab, cmd = m.bluetoothTab.Update(msg)
+	return m, cmd
 }
 
 func (m model) View() tea.View {
@@ -97,15 +130,24 @@ func (m model) View() tea.View {
 
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Bottom, tabRow, gap)
 
+	// Content
+	var content string
+	switch m.activeTab {
+	case 0:
+		content = usbContent
+	case 1:
+		content = m.bluetoothTab.View(contentWidth)
+	}
+
 	contentStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder(), false, true, true, true).
 		BorderForeground(activeColor).
-		Padding(1, 2).
+		Padding(1, 0).
 		Width(contentWidth)
 
-	content := contentStyle.Render(tabContents[m.activeTab])
+	renderedContent := contentStyle.Render(content)
 
-	full := lipgloss.JoinVertical(lipgloss.Left, tabBar, content)
+	full := lipgloss.JoinVertical(lipgloss.Left, tabBar, renderedContent)
 
 	v := tea.NewView(full)
 	v.AltScreen = true
@@ -113,7 +155,10 @@ func (m model) View() tea.View {
 }
 
 func main() {
-	p := tea.NewProgram(model{})
+	m := model{
+		bluetoothTab: newBluetoothModel(),
+	}
+	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
