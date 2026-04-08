@@ -37,3 +37,8 @@ func (m *Model) SetFocused(focused bool) (tui.Tab, tea.Cmd) {
 	m.focused = focused
 	return m, nil
 }
+
+// SetActive is a no-op for the placeholder tab.
+func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
+	return m, nil
+}

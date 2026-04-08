@@ -21,6 +21,7 @@ type Model struct {
 	err         error
 	width       int
 	height      int
+	active      bool
 	focused     bool
 	initialized bool
 	done        chan struct{}
@@ -45,13 +46,20 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 	case initMsg:
 		m.adapter = msg.adapter
 		m.initialized = true
-		m.done = make(chan struct{})
-		return m, tea.Batch(
+		if m.done == nil {
+			m.done = make(chan struct{})
+		}
+		cmds := []tea.Cmd{
+			startDiscovery(m.adapter),
 			fetchAdapterInfo(m.adapter),
 			fetchDevices(m.adapter),
 			listenDeviceEvents(m.done),
 			listenAdapterEvents(m.done),
-		)
+		}
+		if m.active {
+			cmds = append(cmds, scheduleScanTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case adapterInfoMsg:
 		m.adapterInfo = AdapterInfo(msg)
@@ -79,7 +87,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 		return m, tea.Batch(fetchAdapterInfo(m.adapter), listenAdapterEvents(m.done))
 
 	case scanTickMsg:
-		if !m.focused || m.adapter == nil {
+		if !m.active || m.adapter == nil {
 			return m, nil
 		}
 		return m, tea.Batch(
@@ -121,24 +129,34 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 	return m, nil
 }
 
-// SetFocused is called when the tab gains or loses focus.
+// SetFocused is called when the tab content gains or loses keyboard focus.
 func (m *Model) SetFocused(focused bool) (tui.Tab, tea.Cmd) {
 	m.focused = focused
+	return m, nil
+}
+
+// SetActive is called when the tab becomes the visible tab or is switched away from.
+func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
+	m.active = active
 	if !m.initialized || m.adapter == nil {
 		return m, nil
 	}
 
-	if focused {
-		m.done = make(chan struct{})
+	if active {
+		if m.done == nil {
+			m.done = make(chan struct{})
+		}
 		return m, tea.Batch(
 			startDiscovery(m.adapter),
 			fetchDevices(m.adapter),
 			fetchAdapterInfo(m.adapter),
+			listenDeviceEvents(m.done),
+			listenAdapterEvents(m.done),
 			scheduleScanTick(),
 		)
 	}
 
-	// Cancel lingering event listeners.
+	// Cancel event listeners and stop discovery.
 	if m.done != nil {
 		close(m.done)
 		m.done = nil

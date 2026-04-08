@@ -164,8 +164,11 @@ func listenAdapterEvents(done <-chan struct{}) tea.Cmd {
 	}
 }
 
+// ScanInterval is the time between background device list refreshes.
+const ScanInterval = 5 * time.Second
+
 func scheduleScanTick() tea.Cmd {
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(ScanInterval, func(time.Time) tea.Msg {
 		return scanTickMsg{}
 	})
 }

@@ -28,6 +28,33 @@ func (m model) Init() tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
+	// Activate the initial tab.
+	if len(m.tabs) > 0 {
+		tab, cmd := m.tabs[m.activeTab].SetActive(true)
+		m.tabs[m.activeTab] = tab
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *model) switchTab(newIdx int) tea.Cmd {
+	if newIdx == m.activeTab {
+		return nil
+	}
+	var cmds []tea.Cmd
+	tab, cmd := m.tabs[m.activeTab].SetActive(false)
+	m.tabs[m.activeTab] = tab
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	m.activeTab = newIdx
+	tab, cmd = m.tabs[m.activeTab].SetActive(true)
+	m.tabs[m.activeTab] = tab
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -58,9 +85,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tab bar navigation.
 		switch msg.String() {
 		case "tab", "right", "l":
-			m.activeTab = (m.activeTab + 1) % len(m.tabs)
+			newIdx := (m.activeTab + 1) % len(m.tabs)
+			cmd := m.switchTab(newIdx)
+			return m, cmd
 		case "shift+tab", "left", "h":
-			m.activeTab = (m.activeTab - 1 + len(m.tabs)) % len(m.tabs)
+			newIdx := (m.activeTab - 1 + len(m.tabs)) % len(m.tabs)
+			cmd := m.switchTab(newIdx)
+			return m, cmd
 		case "enter":
 			m.focusContent = true
 			tab, cmd := m.tabs[m.activeTab].SetFocused(true)
@@ -72,7 +103,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
 				idx := int(s[0] - '1')
 				if idx < len(m.tabs) {
-					m.activeTab = idx
+					cmd := m.switchTab(idx)
+					return m, cmd
 				}
 			}
 		}

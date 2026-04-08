@@ -10,4 +10,5 @@ type Tab interface {
 	Update(msg tea.Msg) (Tab, tea.Cmd)
 	View(width int) string
 	SetFocused(focused bool) (Tab, tea.Cmd)
+	SetActive(active bool) (Tab, tea.Cmd)
 }
