@@ -8,7 +8,7 @@ type Tab interface {
 	Name() string
 	Init() tea.Cmd
 	Update(msg tea.Msg) (Tab, tea.Cmd)
-	View(width int) string
+	View(width, height int) string
 	SetFocused(focused bool) (Tab, tea.Cmd)
 	SetActive(active bool) (Tab, tea.Cmd)
 }

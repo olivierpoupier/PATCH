@@ -28,7 +28,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 }
 
 // View renders the placeholder content.
-func (m *Model) View(width int) string {
+func (m *Model) View(width, height int) string {
 	return "  USB device management coming soon..."
 }
 

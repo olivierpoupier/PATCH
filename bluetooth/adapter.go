@@ -8,6 +8,15 @@ import (
 	"github.com/bluetuith-org/bluetooth-classic/session"
 )
 
+// Transport indicates how a device communicates.
+type Transport int
+
+const (
+	TransportClassic Transport = iota
+	TransportBLE
+	TransportDual // device seen on both transports
+)
+
 // AdapterInfo holds the current state of the Bluetooth adapter.
 type AdapterInfo struct {
 	Name        string
@@ -18,11 +27,13 @@ type AdapterInfo struct {
 
 // DeviceInfo holds information about a known Bluetooth device.
 type DeviceInfo struct {
-	Name      string
-	Address   bluetooth.MacAddress
-	Type      string
-	Connected bool
-	Paired    bool
+	Name        string
+	Address     string // MAC address (Classic) or CoreBluetooth UUID (BLE)
+	ClassicAddr bluetooth.MacAddress
+	Type        string
+	Connected   bool
+	Paired      bool
+	Transport   Transport
 }
 
 // Adapter wraps the bluetooth-classic session and adapter.
@@ -105,11 +116,13 @@ func (a *Adapter) Devices() ([]DeviceInfo, error) {
 		}
 
 		result = append(result, DeviceInfo{
-			Name:      name,
-			Address:   d.Address,
-			Type:      typeName,
-			Connected: d.Connected,
-			Paired:    d.Paired,
+			Name:        name,
+			Address:     d.Address.String(),
+			ClassicAddr: d.Address,
+			Type:        typeName,
+			Connected:   d.Connected,
+			Paired:      d.Paired,
+			Transport:   TransportClassic,
 		})
 	}
 

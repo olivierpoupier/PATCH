@@ -168,13 +168,25 @@ func (m model) View() tea.View {
 
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Bottom, tabRow, gap)
 
-	content := m.tabs[m.activeTab].View(contentWidth)
+	// Tab bar is 3 lines (top border + text + gap line).
+	// Content border: top padding(1) + bottom padding(1) + bottom border(1) = 3.
+	const tabBarHeight = 3
+	const contentBorderHeight = 3
+	contentHeight := m.height - tabBarHeight - contentBorderHeight
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	// Inner width = contentWidth minus left and right borders.
+	innerWidth := contentWidth - 2
+	content := m.tabs[m.activeTab].View(innerWidth, contentHeight)
 
 	contentStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder(), false, true, true, true).
 		BorderForeground(tui.ActiveColor).
 		Padding(1, 0).
-		Width(contentWidth)
+		Width(contentWidth).
+		Height(contentHeight)
 
 	renderedContent := contentStyle.Render(content)
 

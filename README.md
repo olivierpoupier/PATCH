@@ -21,6 +21,8 @@ make run
 | Linux | BlueZ (`sudo apt install bluez` / `sudo pacman -S bluez`) |
 | macOS | haraltd daemon (installed via `make setup`, requires `gh` CLI) |
 
+> **Note:** BLE peripherals (keyboards, mice, etc.) are discovered natively via CoreBluetooth on macOS and require no extra setup. The haraltd daemon is only needed for Classic Bluetooth devices (speakers, headphones, etc.).
+
 ## Make Commands
 
 | Command | Description |
