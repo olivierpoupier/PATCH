@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 )
 
 // Messages for the bluetooth tab.
@@ -219,101 +220,85 @@ func (m bluetoothModel) renderAdapterInfo(b *strings.Builder, width int) {
 }
 
 func (m bluetoothModel) renderDeviceTable(b *strings.Builder, width int) {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(activeColor)
-	borderStyle := lipgloss.NewStyle().Foreground(activeColor)
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("#04B575")).Foreground(lipgloss.Color("#000000"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	statusConnected := lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
-	statusPaired := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAA00"))
-	statusAvailable := lipgloss.NewStyle().Foreground(inactiveColor)
-
-	// Column widths
 	tableWidth := width - 6
 	if tableWidth < 40 {
 		tableWidth = 40
 	}
 	nameW := tableWidth * 50 / 100
 	typeW := tableWidth * 25 / 100
-	statusW := tableWidth - nameW - typeW - 4 // 4 for separators
+	statusW := tableWidth - nameW - typeW
 
-	// Header
-	b.WriteString(borderStyle.Render(fmt.Sprintf("  ┌%s┬%s┬%s┐\n",
-		strings.Repeat("─", nameW),
-		strings.Repeat("─", typeW),
-		strings.Repeat("─", statusW),
-	)))
-	b.WriteString(fmt.Sprintf("  %s%s%s%s%s%s%s\n",
-		borderStyle.Render("│"),
-		headerStyle.Render(padRight(" Name", nameW)),
-		borderStyle.Render("│"),
-		headerStyle.Render(padRight(" Type", typeW)),
-		borderStyle.Render("│"),
-		headerStyle.Render(padRight(" Status", statusW)),
-		borderStyle.Render("│"),
-	))
-	b.WriteString(borderStyle.Render(fmt.Sprintf("  ├%s┼%s┼%s┤\n",
-		strings.Repeat("─", nameW),
-		strings.Repeat("─", typeW),
-		strings.Repeat("─", statusW),
-	)))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(activeColor).Padding(0, 1)
+	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("#04B575")).Foreground(lipgloss.Color("#000000")).Padding(0, 1)
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 
+	cursor := m.cursor
+
+	var rows [][]string
 	if len(m.devices) == 0 {
-		emptyMsg := " No devices found"
-		b.WriteString(fmt.Sprintf("  %s%s%s\n",
-			borderStyle.Render("│"),
-			lipgloss.NewStyle().Foreground(inactiveColor).Render(padRight(emptyMsg, nameW+typeW+statusW+2)),
-			borderStyle.Render("│"),
-		))
+		rows = [][]string{{"No devices found", "", ""}}
 	} else {
-		for i, dev := range m.devices {
-			name := truncate(dev.Name, nameW-2)
-			typeName := truncate(dev.Type, typeW-2)
+		for _, dev := range m.devices {
+			name := dev.Name
+			typeName := dev.Type
 
 			var status string
 			if dev.Connected {
-				status = statusConnected.Render(padRight(" Connected", statusW))
+				status = "Connected"
 			} else if dev.Paired {
-				status = statusPaired.Render(padRight(" Paired", statusW))
+				status = "Paired"
 			} else {
-				status = statusAvailable.Render(padRight(" Available", statusW))
+				status = "Available"
 			}
 
-			nameCell := " " + name
-			typeCell := " " + typeName
-
-			if m.focused && i == m.cursor {
-				nameCell = selectedStyle.Render(padRight(nameCell, nameW))
-				typeCell = selectedStyle.Render(padRight(typeCell, typeW))
-				status = selectedStyle.Render(padRight(func() string {
-					if dev.Connected {
-						return " Connected"
-					} else if dev.Paired {
-						return " Paired"
-					}
-					return " Available"
-				}(), statusW))
-			} else {
-				nameCell = normalStyle.Render(padRight(nameCell, nameW))
-				typeCell = normalStyle.Render(padRight(typeCell, typeW))
-			}
-
-			b.WriteString(fmt.Sprintf("  %s%s%s%s%s%s%s\n",
-				borderStyle.Render("│"),
-				nameCell,
-				borderStyle.Render("│"),
-				typeCell,
-				borderStyle.Render("│"),
-				status,
-				borderStyle.Render("│"),
-			))
+			rows = append(rows, []string{name, typeName, status})
 		}
 	}
 
-	b.WriteString(borderStyle.Render(fmt.Sprintf("  └%s┴%s┴%s┘",
-		strings.Repeat("─", nameW),
-		strings.Repeat("─", typeW),
-		strings.Repeat("─", statusW),
-	)))
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(activeColor)).
+		Headers("Name", "Type", "Status").
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			var w int
+			switch col {
+			case 0:
+				w = nameW
+			case 1:
+				w = typeW
+			default:
+				w = statusW
+			}
+
+			if row == table.HeaderRow {
+				return headerStyle.Width(w)
+			}
+
+			if m.focused && row == cursor {
+				return selectedStyle.Width(w)
+			}
+
+			base := normalStyle.Width(w)
+			if len(m.devices) == 0 {
+				return base.Foreground(inactiveColor)
+			}
+
+			// Color the status column based on connection state
+			if col == 2 && row < len(m.devices) {
+				dev := m.devices[row]
+				if dev.Connected {
+					return base.Foreground(lipgloss.Color("#04B575"))
+				} else if dev.Paired {
+					return base.Foreground(lipgloss.Color("#FFAA00"))
+				}
+				return base.Foreground(inactiveColor)
+			}
+
+			return base
+		})
+
+	b.WriteString(t.String())
 }
 
 // Commands
@@ -445,21 +430,3 @@ func scheduleScanTick() tea.Cmd {
 	})
 }
 
-// Helpers
-
-func padRight(s string, width int) string {
-	if len(s) >= width {
-		return s[:width]
-	}
-	return s + strings.Repeat(" ", width-len(s))
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}

@@ -21,7 +21,18 @@ make run
 | Linux | BlueZ (`sudo apt install bluez` / `sudo pacman -S bluez`) |
 | macOS | haraltd daemon (installed via `make setup`, requires `gh` CLI) |
 
-Run `make help` to see all available commands.
+## Make Commands
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Compile the binary |
+| `make run` | Build and run (handles haraltd automatically on macOS) |
+| `make deps` | Install Go dependencies |
+| `make clean` | Remove build artifacts |
+| `make setup` | Install haraltd daemon (macOS only, required once) |
+| `make start-haraltd` | Start the haraltd daemon (macOS) |
+| `make stop-haraltd` | Stop the haraltd daemon (macOS) |
+| `make help` | Show all available commands |
 
 ## Keybindings
 
