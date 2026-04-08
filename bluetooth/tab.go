@@ -2,6 +2,7 @@ package bluetooth
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/olivierpoupier/patch/tui"
@@ -97,6 +98,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 
 	case errorMsg:
 		m.err = msg.err
+		slog.Warn("bluetooth error displayed", "error", msg.err)
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -143,6 +145,7 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 	}
 
 	if active {
+		slog.Info("bluetooth tab activated")
 		if m.done == nil {
 			m.done = make(chan struct{})
 		}
@@ -156,6 +159,7 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 		)
 	}
 
+	slog.Info("bluetooth tab deactivated")
 	// Cancel event listeners and stop discovery.
 	if m.done != nil {
 		close(m.done)

@@ -1,6 +1,7 @@
 package bluetooth
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/bluetuith-org/bluetooth-classic/api/bluetooth"
@@ -33,8 +34,10 @@ func initAdapter() tea.Cmd {
 	return func() tea.Msg {
 		adapter, err := NewAdapter()
 		if err != nil {
+			slog.Error("failed to initialize adapter", "error", err)
 			return errorMsg{err}
 		}
+		slog.Info("adapter initialized")
 		return initMsg{adapter: adapter}
 	}
 }
@@ -43,6 +46,7 @@ func fetchAdapterInfo(adapter *Adapter) tea.Cmd {
 	return func() tea.Msg {
 		info, err := adapter.Info()
 		if err != nil {
+			slog.Error("failed to fetch adapter info", "error", err)
 			return errorMsg{err}
 		}
 		return adapterInfoMsg(info)
@@ -53,8 +57,10 @@ func fetchDevices(adapter *Adapter) tea.Cmd {
 	return func() tea.Msg {
 		devs, err := adapter.Devices()
 		if err != nil {
+			slog.Error("failed to fetch devices", "error", err)
 			return errorMsg{err}
 		}
+		slog.Debug("fetched devices", "count", len(devs))
 		return devicesMsg(devs)
 	}
 }
@@ -62,10 +68,13 @@ func fetchDevices(adapter *Adapter) tea.Cmd {
 func startDiscovery(adapter *Adapter) tea.Cmd {
 	return func() tea.Msg {
 		if err := adapter.StartDiscovery(); err != nil {
+			slog.Error("failed to start discovery", "error", err)
 			return errorMsg{err}
 		}
+		slog.Info("discovery started")
 		info, err := adapter.Info()
 		if err != nil {
+			slog.Error("failed to fetch adapter info after discovery start", "error", err)
 			return errorMsg{err}
 		}
 		return adapterInfoMsg(info)
@@ -82,10 +91,13 @@ func stopDiscovery(adapter *Adapter) tea.Cmd {
 func connectDevice(adapter *Adapter, addr bluetooth.MacAddress) tea.Cmd {
 	return func() tea.Msg {
 		if err := adapter.ConnectDevice(addr); err != nil {
+			slog.Error("failed to connect device", "address", addr, "error", err)
 			return errorMsg{err}
 		}
+		slog.Info("device connected", "address", addr)
 		devs, err := adapter.Devices()
 		if err != nil {
+			slog.Error("failed to fetch devices after connect", "error", err)
 			return errorMsg{err}
 		}
 		return devicesMsg(devs)
@@ -95,10 +107,13 @@ func connectDevice(adapter *Adapter, addr bluetooth.MacAddress) tea.Cmd {
 func disconnectDevice(adapter *Adapter, addr bluetooth.MacAddress) tea.Cmd {
 	return func() tea.Msg {
 		if err := adapter.DisconnectDevice(addr); err != nil {
+			slog.Error("failed to disconnect device", "address", addr, "error", err)
 			return errorMsg{err}
 		}
+		slog.Info("device disconnected", "address", addr)
 		devs, err := adapter.Devices()
 		if err != nil {
+			slog.Error("failed to fetch devices after disconnect", "error", err)
 			return errorMsg{err}
 		}
 		return devicesMsg(devs)
@@ -108,10 +123,13 @@ func disconnectDevice(adapter *Adapter, addr bluetooth.MacAddress) tea.Cmd {
 func togglePower(adapter *Adapter) tea.Cmd {
 	return func() tea.Msg {
 		if err := adapter.TogglePower(); err != nil {
+			slog.Error("failed to toggle power", "error", err)
 			return errorMsg{err}
 		}
+		slog.Info("adapter power toggled")
 		info, err := adapter.Info()
 		if err != nil {
+			slog.Error("failed to fetch adapter info after power toggle", "error", err)
 			return errorMsg{err}
 		}
 		return adapterInfoMsg(info)

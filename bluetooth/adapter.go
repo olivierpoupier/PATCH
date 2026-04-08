@@ -1,6 +1,8 @@
 package bluetooth
 
 import (
+	"log/slog"
+
 	"github.com/bluetuith-org/bluetooth-classic/api/bluetooth"
 	"github.com/bluetuith-org/bluetooth-classic/api/config"
 	"github.com/bluetuith-org/bluetooth-classic/session"
@@ -32,6 +34,7 @@ type Adapter struct {
 
 // NewAdapter initializes a Bluetooth session and returns the first adapter.
 func NewAdapter() (*Adapter, error) {
+	slog.Debug("starting bluetooth session")
 	sess := session.NewSession()
 	cfg := config.New()
 
@@ -53,6 +56,7 @@ func NewAdapter() (*Adapter, error) {
 
 	first := adapters[0]
 	adapter := sess.Adapter(first.Address)
+	slog.Debug("adapter selected", "address", first.Address)
 
 	return &Adapter{
 		session: sess,
@@ -123,6 +127,7 @@ func (a *Adapter) TogglePower() error {
 
 // StartDiscovery begins device scanning.
 func (a *Adapter) StartDiscovery() error {
+	slog.Debug("starting discovery")
 	return a.adapter.StartDiscovery()
 }
 
@@ -133,11 +138,13 @@ func (a *Adapter) StopDiscovery() error {
 
 // ConnectDevice connects to a device by address.
 func (a *Adapter) ConnectDevice(addr bluetooth.MacAddress) error {
+	slog.Debug("connecting to device", "address", addr)
 	return a.session.Device(addr).Connect()
 }
 
 // DisconnectDevice disconnects from a device by address.
 func (a *Adapter) DisconnectDevice(addr bluetooth.MacAddress) error {
+	slog.Debug("disconnecting from device", "address", addr)
 	return a.session.Device(addr).Disconnect()
 }
 
