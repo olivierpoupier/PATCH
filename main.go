@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/olivierpoupier/patch/audio"
 	"github.com/olivierpoupier/patch/bluetooth"
 	"github.com/olivierpoupier/patch/logging"
 	"github.com/olivierpoupier/patch/tui"
@@ -26,6 +27,7 @@ func main() {
 	m := newModel([]tui.Tab{
 		usb.New(),
 		bluetooth.New(),
+		audio.New(),
 	})
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
