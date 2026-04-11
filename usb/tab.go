@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 )
 
 // Model is the USB tab's Bubbletea model.
@@ -25,6 +26,9 @@ type Model struct {
 	focused     bool
 	initialized bool
 	viewport    viewport.Model
+	tableView   bool
+	tableRows   []TableRow
+	tableCursor int
 }
 
 // New creates a new USB tab model.
@@ -53,6 +57,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 	case dataMsg:
 		m.groups = msg.groups
 		m.rebuildNodes()
+		m.rebuildTableRows()
 		m.err = nil
 		return m, nil
 
@@ -74,16 +79,31 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
+		case "t":
+			m.tableView = !m.tableView
+			m.viewport.SetYOffset(0)
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+			if m.tableView {
+				if m.tableCursor > 0 {
+					m.tableCursor--
+				}
+			} else {
+				if m.cursor > 0 {
+					m.cursor--
+				}
 			}
 		case "down", "j":
-			if m.cursor < len(m.nodes)-1 {
-				m.cursor++
+			if m.tableView {
+				if m.tableCursor < len(m.tableRows)-1 {
+					m.tableCursor++
+				}
+			} else {
+				if m.cursor < len(m.nodes)-1 {
+					m.cursor++
+				}
 			}
 		case "enter", " ":
-			if m.cursor < len(m.nodes) {
+			if !m.tableView && m.cursor < len(m.nodes) {
 				node := m.nodes[m.cursor]
 				if node.HasChildren {
 					m.collapsed[node.NodeID] = !m.collapsed[node.NodeID]
@@ -141,7 +161,11 @@ func (m *Model) View(width, height int) string {
 		footer.WriteString("\n")
 	}
 	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  enter collapse/expand  esc back"))
+	if m.tableView {
+		footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  t tree view  esc back"))
+	} else {
+		footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  enter collapse/expand  t table view  esc back"))
+	}
 	footerStr := footer.String()
 
 	// Body height.
@@ -152,10 +176,14 @@ func (m *Model) View(width, height int) string {
 		bodyHeight = 3
 	}
 
-	// Render tree.
+	// Render body.
 	tableWidth := width - 1 // reserve for scrollbar
 	var body strings.Builder
-	m.renderTree(&body, tableWidth)
+	if m.tableView {
+		m.renderTable(&body, tableWidth)
+	} else {
+		m.renderTree(&body, tableWidth)
+	}
 	bodyStr := body.String()
 	contentLines := lipgloss.Height(bodyStr)
 
@@ -169,8 +197,14 @@ func (m *Model) View(width, height int) string {
 	m.viewport.SetContent(bodyStr)
 
 	// Auto-scroll to keep cursor visible.
-	if len(m.nodes) > 0 {
-		rowLine := m.cursor
+	activeCursor := m.cursor
+	activeLen := len(m.nodes)
+	if m.tableView {
+		activeCursor = m.tableCursor
+		activeLen = len(m.tableRows)
+	}
+	if activeLen > 0 {
+		rowLine := activeCursor
 		vpHeight := m.viewport.Height()
 		margin := vpHeight / 5
 		if margin < 1 {
@@ -200,11 +234,18 @@ func (m *Model) renderHeader(b *strings.Builder) {
 	total := countDevices(m.groups)
 	ports := len(m.groups)
 
-	b.WriteString(fmt.Sprintf("  %s %s    %s %s\n",
+	viewLabel := "Tree"
+	if m.tableView {
+		viewLabel = "Table"
+	}
+
+	b.WriteString(fmt.Sprintf("  %s %s    %s %s    %s %s\n",
 		labelStyle.Render("Devices:"),
 		valueStyle.Render(fmt.Sprintf("%d", total)),
 		labelStyle.Render("Ports:"),
 		valueStyle.Render(fmt.Sprintf("%d", ports)),
+		labelStyle.Render("View:"),
+		valueStyle.Render(viewLabel),
 	))
 }
 
@@ -296,6 +337,104 @@ func (m *Model) rebuildNodes() {
 	m.nodes = flattenTree(m.groups, m.collapsed)
 	if m.cursor >= len(m.nodes) && len(m.nodes) > 0 {
 		m.cursor = len(m.nodes) - 1
+	}
+}
+
+func (m *Model) rebuildTableRows() {
+	m.tableRows = collectTableRows(m.groups)
+	if m.tableCursor >= len(m.tableRows) && len(m.tableRows) > 0 {
+		m.tableCursor = len(m.tableRows) - 1
+	}
+}
+
+func (m *Model) renderTable(b *strings.Builder, width int) {
+	type rowData struct {
+		name, typ, port, action string
+	}
+	var rowInfos []rowData
+
+	if len(m.tableRows) == 0 {
+		rowInfos = []rowData{{"No peripherals detected", "", "", ""}}
+	} else {
+		for _, r := range m.tableRows {
+			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, ""})
+		}
+	}
+
+	headers := [4]string{"Name", "Type", "Port", "Action"}
+
+	const tableMargin = 2
+	tableWidth := width - tableMargin*2
+	const borderOverhead = 5
+	const cellPadding = 2
+
+	available := tableWidth - borderOverhead
+	if available < 40 {
+		available = 40
+	}
+
+	nameW := available * 40 / 100
+	typeW := available * 20 / 100
+	portW := available * 25 / 100
+	actionW := available - nameW - typeW - portW
+
+	if nameW < 10+cellPadding {
+		nameW = 10 + cellPadding
+	}
+	nameContentW := nameW - cellPadding
+
+	var rows [][]string
+	for _, r := range rowInfos {
+		name := r.name
+		if len([]rune(name)) > nameContentW {
+			name = truncateText(name, nameContentW)
+		}
+		rows = append(rows, []string{name, r.typ, r.port, r.action})
+	}
+
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor).Padding(0, 1)
+	selectedStyle := lipgloss.NewStyle().Background(tui.ActiveColor).Foreground(lipgloss.Color("#000000")).Padding(0, 1)
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
+
+	cursor := m.tableCursor
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(tui.ActiveColor)).
+		Width(tableWidth).
+		Headers(headers[0], headers[1], headers[2], headers[3]).
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			var w int
+			switch col {
+			case 0:
+				w = nameW
+			case 1:
+				w = typeW
+			case 2:
+				w = portW
+			default:
+				w = actionW
+			}
+
+			if row == table.HeaderRow {
+				return headerStyle.Width(w)
+			}
+
+			if m.focused && row == cursor {
+				return selectedStyle.Width(w)
+			}
+
+			base := normalStyle.Width(w)
+			if len(m.tableRows) == 0 {
+				return base.Foreground(tui.InactiveColor)
+			}
+			return base
+		})
+
+	for _, line := range strings.Split(t.String(), "\n") {
+		b.WriteString("  ")
+		b.WriteString(line)
+		b.WriteString("\n")
 	}
 }
 

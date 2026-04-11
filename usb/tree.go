@@ -216,6 +216,47 @@ func countDevicesIn(devices []*USBDevice) int {
 	return n
 }
 
+// TableRow is a flat row for the peripheral table view.
+type TableRow struct {
+	Name   string
+	Type   string
+	Port   string
+	Device *USBDevice
+}
+
+// collectTableRows extracts leaf, removable peripherals into a flat table.
+func collectTableRows(groups []PortGroup) []TableRow {
+	var rows []TableRow
+	for _, g := range groups {
+		for _, bus := range g.Buses {
+			collectDeviceRows(&rows, bus.Devices, g.Label)
+		}
+	}
+	return rows
+}
+
+func collectDeviceRows(rows *[]TableRow, devices []*USBDevice, port string) {
+	for _, dev := range devices {
+		// Skip built-in / non-removable devices.
+		if dev.HardwareType == "Built-in" || dev.HardwareType == "Non-removable" {
+			continue
+		}
+		// Skip hubs — recurse into their children instead.
+		if dev.Type == DeviceTypeHub {
+			collectDeviceRows(rows, dev.Children, port)
+			continue
+		}
+		*rows = append(*rows, TableRow{
+			Name:   formatDeviceName(dev),
+			Type:   dev.Type.String(),
+			Port:   port,
+			Device: dev,
+		})
+		// Also collect any children that aren't hubs/built-in.
+		collectDeviceRows(rows, dev.Children, port)
+	}
+}
+
 // truncateText truncates s to maxWidth runes, appending "…" if truncated.
 func truncateText(s string, maxWidth int) string {
 	if maxWidth <= 1 {
