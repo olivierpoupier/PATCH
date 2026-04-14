@@ -6,6 +6,8 @@
 	<string>com.olivierpoupier.patch</string>
 	<key>CFBundleName</key>
 	<string>patch</string>
+	<key>CFBundleExecutable</key>
+	<string>patch</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Patch needs location access to display WiFi network names (SSIDs).</string>
 </dict>

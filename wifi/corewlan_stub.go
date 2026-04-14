@@ -25,3 +25,12 @@ func (w *WLANClient) ConnectionInfo() (ConnectionInfo, error) {
 func (w *WLANClient) ScanNetworks() ([]NetworkInfo, error) {
 	return nil, nil
 }
+
+// SetPower is a no-op on non-macOS.
+func (w *WLANClient) SetPower(on bool) error { return nil }
+
+// Connect is a no-op on non-macOS.
+func (w *WLANClient) Connect(ssid, password string) error { return nil }
+
+// Disconnect is a no-op on non-macOS.
+func (w *WLANClient) Disconnect() {}

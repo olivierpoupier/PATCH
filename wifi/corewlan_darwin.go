@@ -20,22 +20,38 @@ package wifi
 - (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
 	CLAuthorizationStatus status = [manager authorizationStatus];
 	self.authorized = (status == kCLAuthorizationStatusAuthorizedAlways ||
-	                   status == kCLAuthorizationStatusAuthorized);
+	                   status == kCLAuthorizationStatusAuthorized ||
+	                   status == 4 // AuthorizedWhenInUse
+	                  );
 	self.responded = YES;
 }
 @end
+
+// Keep the CLLocationManager alive for the entire process lifetime.
+// CoreWLAN checks for an active location authorization when scanning;
+// if the manager is deallocated, SSIDs are redacted even when authorized.
+static CLLocationManager *_persistentLocationManager = nil;
+static LocationDelegate  *_persistentLocationDelegate = nil;
+
+static BOOL isLocationAuthorized(CLAuthorizationStatus status) {
+	return (status == kCLAuthorizationStatusAuthorizedAlways ||
+	        status == kCLAuthorizationStatusAuthorized ||
+	        status == 4); // AuthorizedWhenInUse
+}
 
 // requestLocationAuthorization requests location access and blocks until
 // the user responds or the permission is already determined.
 // Returns 1 if authorized, 0 otherwise.
 static int requestLocationAuthorization(void) {
 	@autoreleasepool {
-		CLLocationManager *mgr = [[CLLocationManager alloc] init];
-		CLAuthorizationStatus status = [mgr authorizationStatus];
+		_persistentLocationDelegate = [[LocationDelegate alloc] init];
+		_persistentLocationManager = [[CLLocationManager alloc] init];
+		_persistentLocationManager.delegate = _persistentLocationDelegate;
+
+		CLAuthorizationStatus status = [_persistentLocationManager authorizationStatus];
 
 		// Already determined.
-		if (status == kCLAuthorizationStatusAuthorizedAlways ||
-		    status == kCLAuthorizationStatusAuthorized) {
+		if (isLocationAuthorized(status)) {
 			return 1;
 		}
 		if (status == kCLAuthorizationStatusDenied ||
@@ -44,27 +60,26 @@ static int requestLocationAuthorization(void) {
 		}
 
 		// Not determined — request and wait.
-		LocationDelegate *delegate = [[LocationDelegate alloc] init];
-		mgr.delegate = delegate;
-		[mgr requestWhenInUseAuthorization];
+		[_persistentLocationManager requestWhenInUseAuthorization];
 
 		// Spin the run loop briefly to let the delegate fire.
 		NSDate *timeout = [NSDate dateWithTimeIntervalSinceNow:30.0];
-		while (!delegate.responded && [[NSDate date] compare:timeout] == NSOrderedAscending) {
+		while (!_persistentLocationDelegate.responded && [[NSDate date] compare:timeout] == NSOrderedAscending) {
 			[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
 			                         beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
 		}
-		return delegate.authorized ? 1 : 0;
+		return _persistentLocationDelegate.authorized ? 1 : 0;
 	}
 }
 
 // locationAuthorized checks if location is already authorized (non-blocking).
 static int locationAuthorized(void) {
+	if (_persistentLocationManager != nil) {
+		return isLocationAuthorized([_persistentLocationManager authorizationStatus]) ? 1 : 0;
+	}
 	@autoreleasepool {
 		CLLocationManager *mgr = [[CLLocationManager alloc] init];
-		CLAuthorizationStatus status = [mgr authorizationStatus];
-		return (status == kCLAuthorizationStatusAuthorizedAlways ||
-		        status == kCLAuthorizationStatusAuthorized) ? 1 : 0;
+		return isLocationAuthorized([mgr authorizationStatus]) ? 1 : 0;
 	}
 }
 
@@ -183,6 +198,58 @@ CConnectionInfo getConnectionInfo(void) {
 	return info;
 }
 
+static int setWiFiPower(int on, char **errOut) {
+	@autoreleasepool {
+		CWInterface *iface = [[CWWiFiClient sharedWiFiClient] interface];
+		if (iface == nil) {
+			if (errOut) *errOut = strdup("no WiFi interface found");
+			return -1;
+		}
+		NSError *error = nil;
+		BOOL ok = [iface setPower:(on != 0) error:&error];
+		if (!ok && errOut) {
+			*errOut = copyNSString([error localizedDescription]);
+		}
+		return ok ? 0 : -1;
+	}
+}
+
+static int connectToNetwork(const char *ssidName, const char *password, char **errOut) {
+	@autoreleasepool {
+		CWInterface *iface = [[CWWiFiClient sharedWiFiClient] interface];
+		if (iface == nil) {
+			if (errOut) *errOut = strdup("no WiFi interface found");
+			return -1;
+		}
+		NSError *error = nil;
+		NSString *ssid = [NSString stringWithUTF8String:ssidName];
+		NSSet<CWNetwork *> *networks = [iface scanForNetworksWithName:ssid error:&error];
+		if (error != nil) {
+			if (errOut) *errOut = copyNSString([error localizedDescription]);
+			return -1;
+		}
+		if (networks == nil || networks.count == 0) {
+			if (errOut) *errOut = strdup("network not found");
+			return -1;
+		}
+		CWNetwork *target = [networks anyObject];
+		NSString *pass = password ? [NSString stringWithUTF8String:password] : nil;
+		BOOL ok = [iface associateToNetwork:target password:pass error:&error];
+		if (!ok) {
+			if (errOut) *errOut = copyNSString([error localizedDescription]);
+			return -1;
+		}
+		return 0;
+	}
+}
+
+static void disconnectFromNetwork(void) {
+	@autoreleasepool {
+		CWInterface *iface = [[CWWiFiClient sharedWiFiClient] interface];
+		if (iface != nil) [iface disassociate];
+	}
+}
+
 int scanNetworks(CNetworkInfo *out, int maxCount, char **errOut) {
 	@autoreleasepool {
 		CWInterface *iface = [[CWWiFiClient sharedWiFiClient] interface];
@@ -299,6 +366,55 @@ func (w *WLANClient) ConnectionInfo() (ConnectionInfo, error) {
 		PHYMode:   PHYMode(cc.phyMode),
 	}
 	return conn, nil
+}
+
+// SetPower turns WiFi on or off.
+func (w *WLANClient) SetPower(on bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	cOn := C.int(0)
+	if on {
+		cOn = 1
+	}
+	var errStr *C.char
+	rc := C.setWiFiPower(cOn, &errStr)
+	if rc != 0 {
+		msg := goString(errStr)
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// Connect associates with a WiFi network. Pass empty password for open/keychain networks.
+func (w *WLANClient) Connect(ssid, password string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	cSSID := C.CString(ssid)
+	defer C.free(unsafe.Pointer(cSSID))
+
+	var cPass *C.char
+	if password != "" {
+		cPass = C.CString(password)
+		defer C.free(unsafe.Pointer(cPass))
+	}
+
+	var errStr *C.char
+	rc := C.connectToNetwork(cSSID, cPass, &errStr)
+	if rc != 0 {
+		msg := goString(errStr)
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// Disconnect disassociates from the current WiFi network.
+func (w *WLANClient) Disconnect() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	C.disconnectFromNetwork()
 }
 
 // ScanNetworks scans for available WiFi networks.

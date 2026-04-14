@@ -9,9 +9,20 @@ import (
 	"github.com/olivierpoupier/patch/tui"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
+)
+
+type connectPhase int
+
+const (
+	phaseIdle         connectPhase = iota
+	phaseConfirm                   // open network confirmation
+	phasePassword                  // password entry modal
+	phaseConnecting                // async connect in progress
+	phaseDisconnecting             // async disconnect in progress
 )
 
 // Model is the WiFi tab's Bubbletea model.
@@ -30,6 +41,10 @@ type Model struct {
 	initialized    bool
 	locationAuthed bool
 	viewport       viewport.Model
+	connectState   connectPhase
+	connectTarget  NetworkInfo
+	passwordInput  textinput.Model
+	connectErr     error
 }
 
 // New creates a new WiFi tab model.
@@ -111,6 +126,50 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 			scheduleScanTick(),
 		)
 
+	case powerToggleMsg:
+		m.iface = InterfaceInfo(msg)
+		m.err = nil
+		if m.iface.PowerOn {
+			return m, tea.Batch(
+				fetchConnection(m.client),
+				scanNetworksCmd(m.client),
+				scheduleConnectionTick(),
+				scheduleScanTick(),
+			)
+		}
+		// WiFi turned off — clear connection and networks.
+		m.connection = ConnectionInfo{}
+		m.networks = nil
+		m.cursor = 0
+		return m, nil
+
+	case connectResultMsg:
+		m.connectState = phaseIdle
+		if msg.err != nil {
+			m.connectErr = msg.err
+			slog.Warn("wifi connect failed", "error", msg.err)
+			return m, nil
+		}
+		m.connectErr = nil
+		return m, tea.Batch(
+			fetchInterfaceInfo(m.client),
+			fetchConnection(m.client),
+			scanNetworksCmd(m.client),
+		)
+
+	case disconnectResultMsg:
+		m.connectState = phaseIdle
+		if msg.err != nil {
+			m.connectErr = msg.err
+			slog.Warn("wifi disconnect failed", "error", msg.err)
+			return m, nil
+		}
+		m.connectErr = nil
+		return m, tea.Batch(
+			fetchInterfaceInfo(m.client),
+			fetchConnection(m.client),
+		)
+
 	case errorMsg:
 		m.err = msg.err
 		m.scanning = false
@@ -121,16 +180,99 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 		if !m.focused || !m.initialized {
 			return m, nil
 		}
-		switch msg.String() {
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.networks)-1 {
-				m.cursor++
-			}
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tui.Tab, tea.Cmd) {
+	key := msg.String()
+
+	// When in a modal, handle modal-specific keys.
+	if m.connectState != phaseIdle {
+		return m.handleModalKey(msg, key)
+	}
+
+	// Normal mode keys.
+	switch key {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
 		}
+	case "down", "j":
+		if m.cursor < len(m.networks)-1 {
+			m.cursor++
+		}
+	case "p":
+		if m.client != nil {
+			return m, togglePower(m.client)
+		}
+	case "enter":
+		if m.client == nil || len(m.networks) == 0 || m.cursor >= len(m.networks) {
+			return m, nil
+		}
+		net := m.networks[m.cursor]
+		// If this is the connected network, disconnect.
+		if net.SSID == m.connection.SSID && m.connection.Connected && net.SSID != "" {
+			m.connectState = phaseDisconnecting
+			m.connectTarget = net
+			return m, disconnectCmd(m.client)
+		}
+		// Open network: show confirmation.
+		if net.Security == SecurityNone {
+			m.connectState = phaseConfirm
+			m.connectTarget = net
+			m.connectErr = nil
+			return m, nil
+		}
+		// Secured network: show password modal.
+		m.connectState = phasePassword
+		m.connectTarget = net
+		m.connectErr = nil
+		ti := textinput.New()
+		ti.Placeholder = "Enter password"
+		ti.EchoMode = textinput.EchoPassword
+		ti.Focus()
+		m.passwordInput = ti
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) handleModalKey(msg tea.KeyPressMsg, key string) (tui.Tab, tea.Cmd) {
+	switch m.connectState {
+	case phaseConfirm:
+		switch key {
+		case "enter":
+			m.connectState = phaseConnecting
+			ssid := m.connectTarget.SSID
+			return m, connectToNetworkCmd(m.client, ssid, "")
+		case "esc":
+			m.connectState = phaseIdle
+			m.connectErr = nil
+		}
+		return m, nil
+
+	case phasePassword:
+		switch key {
+		case "enter":
+			m.connectState = phaseConnecting
+			ssid := m.connectTarget.SSID
+			pass := m.passwordInput.Value()
+			return m, connectToNetworkCmd(m.client, ssid, pass)
+		case "esc":
+			m.connectState = phaseIdle
+			m.connectErr = nil
+			return m, nil
+		}
+		// Forward to textinput for typing.
+		var cmd tea.Cmd
+		m.passwordInput, cmd = m.passwordInput.Update(msg)
+		return m, cmd
+
+	case phaseConnecting, phaseDisconnecting:
+		// No key handling while async operation is in progress.
+		return m, nil
 	}
 	return m, nil
 }
@@ -180,13 +322,24 @@ func (m *Model) View(width, height int) string {
 
 	// Render footer (error + help).
 	var footer strings.Builder
-	if m.err != nil {
+	if m.connectErr != nil {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
+		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.connectErr)))
+		footer.WriteString("\n")
+	} else if m.err != nil {
 		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
 		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
 		footer.WriteString("\n")
 	}
 	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  esc back"))
+	switch {
+	case m.connectState == phaseConfirm || m.connectState == phasePassword:
+		footer.WriteString(helpStyle.Render("  enter confirm  esc cancel"))
+	case !m.iface.PowerOn:
+		footer.WriteString(helpStyle.Render("  p power on  esc back"))
+	default:
+		footer.WriteString(helpStyle.Render("  p power  enter connect  ↑↓/jk navigate  esc back"))
+	}
 	footerStr := footer.String()
 
 	// Calculate body height for the viewport.
@@ -209,9 +362,13 @@ func (m *Model) View(width, height int) string {
 	} else {
 		if !m.locationAuthed {
 			warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAA00"))
-			body.WriteString(warnStyle.Render("  ⚠ Location Services permission required for SSID visibility."))
+			body.WriteString(warnStyle.Render("  ⚠ Location Services required for SSID visibility."))
 			body.WriteString("\n")
-			body.WriteString(warnStyle.Render("  Grant access in System Settings → Privacy & Security → Location Services."))
+			body.WriteString(warnStyle.Render("  Grant access when prompted, or enable patch in:"))
+			body.WriteString("\n")
+			body.WriteString(warnStyle.Render("  System Settings > Privacy & Security > Location Services"))
+			body.WriteString("\n")
+			body.WriteString(warnStyle.Render("  Then restart patch."))
 			body.WriteString("\n\n")
 		}
 		m.renderConnectionBlock(&body, tableWidth)
@@ -260,7 +417,92 @@ func (m *Model) View(width, height int) string {
 	vpView := m.viewport.View()
 	vpView = m.overlayScrollbar(vpView, bodyHeight, contentLines)
 
+	// Render connect modal overlay if active.
+	if m.connectState != phaseIdle {
+		vpView = m.renderConnectOverlay(vpView, width, bodyHeight)
+	}
+
 	return headerStr + "\n" + vpView + "\n" + footerStr
+}
+
+func (m *Model) renderConnectOverlay(base string, width, height int) string {
+	var content string
+	ssid := m.connectTarget.SSID
+	if ssid == "" {
+		ssid = "(Hidden)"
+	}
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+
+	switch m.connectState {
+	case phaseConfirm:
+		content = titleStyle.Render("Connect to "+ssid+"?") + "\n\n" +
+			dimStyle.Render("enter confirm  esc cancel")
+	case phasePassword:
+		content = titleStyle.Render("Connect to "+ssid) + "\n\n" +
+			valueStyle.Render("Password: ") + m.passwordInput.View() + "\n\n" +
+			dimStyle.Render("enter connect  esc cancel")
+	case phaseConnecting:
+		content = titleStyle.Render("Connecting to "+ssid+"...")
+	case phaseDisconnecting:
+		content = titleStyle.Render("Disconnecting...")
+	default:
+		return base
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tui.ActiveColor).
+		Padding(1, 3)
+	box := boxStyle.Render(content)
+
+	boxWidth := lipgloss.Width(box)
+	boxHeight := lipgloss.Height(box)
+
+	// Center the box on the base content.
+	baseLines := strings.Split(base, "\n")
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+	if len(baseLines) > height {
+		baseLines = baseLines[:height]
+	}
+
+	startRow := (height - boxHeight) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+	startCol := (width - boxWidth) / 2
+	if startCol < 0 {
+		startCol = 0
+	}
+
+	boxLines := strings.Split(box, "\n")
+	for i, boxLine := range boxLines {
+		row := startRow + i
+		if row >= len(baseLines) {
+			break
+		}
+		line := baseLines[row]
+		// Pad the base line to startCol with spaces if needed.
+		lineRunes := []rune(line)
+		if len(lineRunes) < startCol {
+			line = line + strings.Repeat(" ", startCol-len(lineRunes))
+		}
+		// Replace the portion of the line with the box line.
+		pre := string([]rune(line)[:startCol])
+		boxLineRunes := []rune(boxLine)
+		afterCol := startCol + len(boxLineRunes)
+		var post string
+		if afterCol < len(lineRunes) {
+			post = string(lineRunes[afterCol:])
+		}
+		baseLines[row] = pre + boxLine + post
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 func (m *Model) renderInterfaceHeader(b *strings.Builder, width int) {

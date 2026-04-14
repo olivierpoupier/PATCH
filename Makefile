@@ -8,10 +8,16 @@ UNAME_M := $(shell uname -m)
 
 .PHONY: build run clean deps setup check-haraltd start-haraltd stop-haraltd
 
-## build: Compile the binary
+APP_BUNDLE := $(BINARY_NAME).app
+
+## build: Compile the binary (macOS: .app bundle for Location Services)
 build:
 ifeq ($(UNAME_S),Darwin)
-	go build -ldflags="-extldflags '-sectcreate __TEXT __info_plist Info.plist'" -o $(BINARY_NAME) .
+	go build -o $(BINARY_NAME) .
+	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	@cp $(BINARY_NAME) $(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)
+	@cp Info.plist $(APP_BUNDLE)/Contents/Info.plist
+	codesign -f -s - $(APP_BUNDLE)
 else
 	go build -o $(BINARY_NAME) .
 endif
@@ -23,7 +29,7 @@ ifeq ($(UNAME_S),Linux)
 	./$(BINARY_NAME)
 else ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) --no-print-directory ensure-haraltd
-	./$(BINARY_NAME)
+	./$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)
 else
 	@echo "Unsupported platform: $(UNAME_S)"
 	@exit 1
@@ -36,6 +42,7 @@ deps:
 ## clean: Remove build artifacts
 clean:
 	rm -f $(BINARY_NAME)
+	rm -rf $(APP_BUNDLE)
 
 # --- macOS haraltd management ---
 
