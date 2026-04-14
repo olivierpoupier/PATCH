@@ -15,10 +15,14 @@ type model struct {
 	focusContent bool
 	width        int
 	height       int
+	theme        *tui.Theme
 }
 
-func newModel(tabs []tui.Tab) model {
-	return model{tabs: tabs}
+func newModel(theme *tui.Theme, tabs []tui.Tab) model {
+	return model{
+		tabs:  tabs,
+		theme: theme,
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -63,7 +67,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		// Propagate to all tabs so they can cache dimensions.
 
 	case tea.KeyPressMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
@@ -131,25 +135,12 @@ func (m model) View() tea.View {
 
 	contentWidth := m.width - 2
 
-	activeTabStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(tui.ActiveColor).
-		Border(lipgloss.RoundedBorder(), true, true, false, true).
-		BorderForeground(tui.ActiveColor).
-		Padding(0, 1)
-
-	inactiveTabStyle := lipgloss.NewStyle().
-		Foreground(tui.InactiveColor).
-		Border(lipgloss.RoundedBorder(), true, true, true, true).
-		BorderForeground(tui.InactiveColor).
-		Padding(0, 1)
-
 	var renderedTabs []string
 	for i, t := range m.tabs {
 		if i == m.activeTab {
-			renderedTabs = append(renderedTabs, activeTabStyle.Render(t.Name()))
+			renderedTabs = append(renderedTabs, m.theme.TabActive.Render(t.Name()))
 		} else {
-			renderedTabs = append(renderedTabs, inactiveTabStyle.Render(t.Name()))
+			renderedTabs = append(renderedTabs, m.theme.TabInactive.Render(t.Name()))
 		}
 	}
 
@@ -159,11 +150,9 @@ func (m model) View() tea.View {
 	gapWidth := contentWidth - tabRowWidth
 	var gap string
 	if gapWidth > 1 {
-		gapStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
-		gap = gapStyle.Render(strings.Repeat("─", gapWidth-1) + "╮")
+		gap = m.theme.Border.Render(strings.Repeat("─", gapWidth-1) + "╮")
 	} else if gapWidth == 1 {
-		gapStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
-		gap = gapStyle.Render("╮")
+		gap = m.theme.Border.Render("╮")
 	}
 
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Bottom, tabRow, gap)
@@ -183,7 +172,7 @@ func (m model) View() tea.View {
 
 	contentStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder(), false, true, true, true).
-		BorderForeground(tui.ActiveColor).
+		BorderForeground(m.theme.Active).
 		Padding(1, 0).
 		Width(contentWidth).
 		Height(contentHeight)

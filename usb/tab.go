@@ -5,15 +5,16 @@ import (
 	"strings"
 
 	"github.com/olivierpoupier/patch/tui"
+	"github.com/olivierpoupier/patch/tui/components"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 )
 
 // Model is the USB tab's Bubbletea model.
 type Model struct {
+	theme       *tui.Theme
 	scanner     *USBScanner
 	groups      []PortGroup
 	nodes       []TreeNode
@@ -25,16 +26,18 @@ type Model struct {
 	active      bool
 	focused     bool
 	initialized bool
-	viewport    viewport.Model
+	scroll      components.ScrollableView
 	tableView   bool
 	tableRows   []TableRow
 	tableCursor int
 }
 
 // New creates a new USB tab model.
-func New() *Model {
+func New(theme *tui.Theme) *Model {
 	return &Model{
+		theme:     theme,
 		collapsed: make(map[string]bool),
+		scroll:    components.NewScrollableView(theme),
 	}
 }
 
@@ -81,7 +84,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 		switch msg.String() {
 		case "t":
 			m.tableView = !m.tableView
-			m.viewport.SetYOffset(0)
+			m.scroll = m.scroll.SetYOffset(0)
 		case "up", "k":
 			if m.tableView {
 				if m.tableCursor > 0 {
@@ -142,31 +145,49 @@ func (m *Model) View(width, height int) string {
 	m.height = height
 
 	if !m.initialized {
-		return "  Initializing USB..."
+		return m.theme.Dim.Render("  Initializing USB...")
 	}
 	if m.err != nil && m.scanner == nil {
-		return fmt.Sprintf("  USB error: %v", m.err)
+		return m.theme.ErrorText.Render(fmt.Sprintf("  USB error: %v", m.err))
 	}
 
 	// Header.
-	var header strings.Builder
-	m.renderHeader(&header)
-	headerStr := header.String()
+	total := countDevices(m.groups)
+	ports := len(m.groups)
+	viewLabel := "Tree"
+	if m.tableView {
+		viewLabel = "Table"
+	}
+	headerStr := components.RenderHeader(m.theme, [][]components.HeaderField{
+		{
+			{Label: "Devices", Value: fmt.Sprintf("%d", total)},
+			{Label: "Ports", Value: fmt.Sprintf("%d", ports)},
+			{Label: "View", Value: viewLabel},
+		},
+	}, width)
 
 	// Footer.
-	var footer strings.Builder
+	var footerParts []string
 	if m.err != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
-		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
-		footer.WriteString("\n")
+		footerParts = append(footerParts, components.RenderError(m.theme, m.err, width))
 	}
-	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	var bindings []components.KeyBinding
 	if m.tableView {
-		footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  t tree view  esc back"))
+		bindings = []components.KeyBinding{
+			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "t", Description: "tree view"},
+			{Keys: "esc", Description: "back"},
+		}
 	} else {
-		footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  enter collapse/expand  t table view  esc back"))
+		bindings = []components.KeyBinding{
+			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "enter", Description: "collapse/expand"},
+			{Keys: "t", Description: "table view"},
+			{Keys: "esc", Description: "back"},
+		}
 	}
-	footerStr := footer.String()
+	footerParts = append(footerParts, components.RenderFooter(m.theme, bindings, width))
+	footerStr := strings.Join(footerParts, "\n")
 
 	// Body height.
 	headerHeight := lipgloss.Height(headerStr)
@@ -185,16 +206,14 @@ func (m *Model) View(width, height int) string {
 		m.renderTree(&body, tableWidth)
 	}
 	bodyStr := body.String()
-	contentLines := lipgloss.Height(bodyStr)
 
 	// Pad below so the last row can scroll up.
 	for i := 0; i < bodyHeight/2; i++ {
 		bodyStr += "\n"
 	}
 
-	m.viewport.SetWidth(tableWidth)
-	m.viewport.SetHeight(bodyHeight)
-	m.viewport.SetContent(bodyStr)
+	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep cursor visible.
 	activeCursor := m.cursor
@@ -204,56 +223,18 @@ func (m *Model) View(width, height int) string {
 		activeLen = len(m.tableRows)
 	}
 	if activeLen > 0 {
-		rowLine := activeCursor
-		vpHeight := m.viewport.Height()
-		margin := vpHeight / 5
-		if margin < 1 {
-			margin = 1
-		}
-		yOffset := m.viewport.YOffset()
-		if rowLine < yOffset+margin {
-			m.viewport.SetYOffset(rowLine - margin)
-		} else if rowLine >= yOffset+vpHeight-margin {
-			m.viewport.SetYOffset(rowLine - vpHeight + margin + 1)
-		}
-		if m.viewport.YOffset() < 0 {
-			m.viewport.SetYOffset(0)
-		}
+		m.scroll = m.scroll.ScrollToLine(activeCursor)
 	}
 
-	vpView := m.viewport.View()
-	vpView = m.overlayScrollbar(vpView, bodyHeight, contentLines)
+	vpView := m.scroll.View()
 
 	return headerStr + "\n" + vpView + "\n" + footerStr
 }
 
-func (m *Model) renderHeader(b *strings.Builder) {
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-
-	total := countDevices(m.groups)
-	ports := len(m.groups)
-
-	viewLabel := "Tree"
-	if m.tableView {
-		viewLabel = "Table"
-	}
-
-	b.WriteString(fmt.Sprintf("  %s %s    %s %s    %s %s\n",
-		labelStyle.Render("Devices:"),
-		valueStyle.Render(fmt.Sprintf("%d", total)),
-		labelStyle.Render("Ports:"),
-		valueStyle.Render(fmt.Sprintf("%d", ports)),
-		labelStyle.Render("View:"),
-		valueStyle.Render(viewLabel),
-	))
-}
-
 func (m *Model) renderTree(b *strings.Builder, width int) {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	selectedBg := lipgloss.NewStyle().Background(tui.ActiveColor).Foreground(lipgloss.Color("#000000"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	selectedBg := m.theme.Selected
+	normalStyle := m.theme.Value
+	dimStyle := m.theme.Dim
 
 	typeW := 12
 
@@ -263,9 +244,9 @@ func (m *Model) renderTree(b *strings.Builder, width int) {
 		if node.IsHeader {
 			text := "  " + node.Label
 			if isSelected {
-				b.WriteString(selectedBg.Render(padRight(text, width)))
+				b.WriteString(selectedBg.Render(components.PadRight(text, width)))
 			} else {
-				b.WriteString(headerStyle.Render(text))
+				b.WriteString(m.theme.Label.Render(text))
 			}
 			b.WriteString("\n")
 			continue
@@ -308,26 +289,23 @@ func (m *Model) renderTree(b *strings.Builder, width int) {
 		}
 
 		nameText := node.Label
-		if node.IsBus {
-			nameText = node.Label
-		}
 		if len([]rune(nameText)) > nameW {
-			nameText = truncateText(nameText, nameW)
+			nameText = components.TruncateText(nameText, nameW)
 		}
 
 		if isSelected {
-			content := padRight(nameText, nameW) + "  " + padRight(node.TypeLabel, typeW)
+			content := components.PadRight(nameText, nameW) + "  " + components.PadRight(node.TypeLabel, typeW)
 			b.WriteString(prefixStr)
-			b.WriteString(selectedBg.Render(padRight(content, width-prefixWidth)))
+			b.WriteString(selectedBg.Render(components.PadRight(content, width-prefixWidth)))
 		} else {
 			style := normalStyle
 			if node.IsBuiltIn || node.IsBus {
 				style = dimStyle
 			}
 			b.WriteString(prefixStr)
-			b.WriteString(style.Render(padRight(nameText, nameW)))
+			b.WriteString(style.Render(components.PadRight(nameText, nameW)))
 			b.WriteString("  ")
-			b.WriteString(dimStyle.Render(padRight(node.TypeLabel, typeW)))
+			b.WriteString(dimStyle.Render(components.PadRight(node.TypeLabel, typeW)))
 		}
 		b.WriteString("\n")
 	}
@@ -388,19 +366,16 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 	for _, r := range rowInfos {
 		name := r.name
 		if len([]rune(name)) > nameContentW {
-			name = truncateText(name, nameContentW)
+			name = components.TruncateText(name, nameContentW)
 		}
 		rows = append(rows, []string{name, r.typ, r.port, r.storage, r.action})
 	}
 
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor).Padding(0, 1)
-	selectedStyle := lipgloss.NewStyle().Background(tui.ActiveColor).Foreground(lipgloss.Color("#000000")).Padding(0, 1)
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
-
 	cursor := m.tableCursor
+	theme := m.theme
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(tui.ActiveColor)).
+		BorderStyle(theme.Border).
 		Width(tableWidth).
 		Headers(headers[0], headers[1], headers[2], headers[3], headers[4]).
 		Rows(rows...).
@@ -420,16 +395,16 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 			}
 
 			if row == table.HeaderRow {
-				return headerStyle.Width(w)
+				return theme.TableHeader.Width(w)
 			}
 
 			if m.focused && row == cursor {
-				return selectedStyle.Width(w)
+				return theme.Selected.Width(w)
 			}
 
-			base := normalStyle.Width(w)
+			base := theme.TableCell.Width(w)
 			if len(m.tableRows) == 0 {
-				return base.Foreground(tui.InactiveColor)
+				return base.Foreground(theme.Inactive)
 			}
 			return base
 		})
@@ -439,54 +414,4 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-}
-
-// overlayScrollbar renders a scrollbar track on the right edge of the viewport.
-func (m *Model) overlayScrollbar(vpView string, vpHeight int, contentLines int) string {
-	if contentLines <= vpHeight {
-		return vpView
-	}
-
-	trackStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	thumbStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
-
-	thumbSize := vpHeight * vpHeight / contentLines
-	if thumbSize < 1 {
-		thumbSize = 1
-	}
-	scrollable := contentLines - vpHeight
-	if scrollable < 0 {
-		scrollable = 0
-	}
-	yOffset := m.viewport.YOffset()
-	if yOffset > scrollable {
-		yOffset = scrollable
-	}
-	thumbPos := 0
-	if scrollable > 0 {
-		if yOffset >= scrollable {
-			thumbPos = vpHeight - thumbSize
-		} else {
-			thumbPos = yOffset * (vpHeight - thumbSize) / scrollable
-		}
-	}
-
-	lines := strings.Split(vpView, "\n")
-	if len(lines) > vpHeight {
-		lines = lines[:vpHeight]
-	}
-
-	var b strings.Builder
-	for i := 0; i < len(lines); i++ {
-		b.WriteString(lines[i])
-		if i >= thumbPos && i < thumbPos+thumbSize {
-			b.WriteString(thumbStyle.Render("┃"))
-		} else {
-			b.WriteString(trackStyle.Render("│"))
-		}
-		if i < len(lines)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
 }

@@ -324,23 +324,3 @@ func formatBytes(b int64) string {
 	}
 }
 
-// truncateText truncates s to maxWidth runes, appending "…" if truncated.
-func truncateText(s string, maxWidth int) string {
-	if maxWidth <= 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
-		return s
-	}
-	return string(runes[:maxWidth-1]) + "…"
-}
-
-// padRight pads s with spaces to width. If s is longer, it is returned as-is.
-func padRight(s string, width int) string {
-	r := []rune(s)
-	if len(r) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(r))
-}
