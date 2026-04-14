@@ -10,7 +10,11 @@ UNAME_M := $(shell uname -m)
 
 ## build: Compile the binary
 build:
+ifeq ($(UNAME_S),Darwin)
+	go build -ldflags="-extldflags '-sectcreate __TEXT __info_plist Info.plist'" -o $(BINARY_NAME) .
+else
 	go build -o $(BINARY_NAME) .
+endif
 
 ## run: Build and run the app (handles platform setup automatically)
 run: build

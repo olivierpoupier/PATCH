@@ -9,6 +9,7 @@ import (
 	"github.com/olivierpoupier/patch/logging"
 	"github.com/olivierpoupier/patch/tui"
 	"github.com/olivierpoupier/patch/usb"
+	"github.com/olivierpoupier/patch/wifi"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -26,6 +27,7 @@ func main() {
 	m := newModel([]tui.Tab{
 		usb.New(),
 		bluetooth.New(),
+		wifi.New(),
 	})
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
