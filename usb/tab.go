@@ -349,23 +349,23 @@ func (m *Model) rebuildTableRows() {
 
 func (m *Model) renderTable(b *strings.Builder, width int) {
 	type rowData struct {
-		name, typ, port, action string
+		name, typ, port, storage, action string
 	}
 	var rowInfos []rowData
 
 	if len(m.tableRows) == 0 {
-		rowInfos = []rowData{{"No peripherals detected", "", "", ""}}
+		rowInfos = []rowData{{"No peripherals detected", "", "", "", ""}}
 	} else {
 		for _, r := range m.tableRows {
-			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, ""})
+			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, r.Storage, ""})
 		}
 	}
 
-	headers := [4]string{"Name", "Type", "Port", "Action"}
+	headers := [5]string{"Name", "Type", "Port", "Storage", "Action"}
 
 	const tableMargin = 2
 	tableWidth := width - tableMargin*2
-	const borderOverhead = 5
+	const borderOverhead = 6
 	const cellPadding = 2
 
 	available := tableWidth - borderOverhead
@@ -373,10 +373,11 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 		available = 40
 	}
 
-	nameW := available * 40 / 100
-	typeW := available * 20 / 100
-	portW := available * 25 / 100
-	actionW := available - nameW - typeW - portW
+	nameW := available * 28 / 100
+	typeW := available * 12 / 100
+	portW := available * 15 / 100
+	storageW := available * 30 / 100
+	actionW := available - nameW - typeW - portW - storageW
 
 	if nameW < 10+cellPadding {
 		nameW = 10 + cellPadding
@@ -389,7 +390,7 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 		if len([]rune(name)) > nameContentW {
 			name = truncateText(name, nameContentW)
 		}
-		rows = append(rows, []string{name, r.typ, r.port, r.action})
+		rows = append(rows, []string{name, r.typ, r.port, r.storage, r.action})
 	}
 
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor).Padding(0, 1)
@@ -401,7 +402,7 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(tui.ActiveColor)).
 		Width(tableWidth).
-		Headers(headers[0], headers[1], headers[2], headers[3]).
+		Headers(headers[0], headers[1], headers[2], headers[3], headers[4]).
 		Rows(rows...).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			var w int
@@ -412,6 +413,8 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 				w = typeW
 			case 2:
 				w = portW
+			case 3:
+				w = storageW
 			default:
 				w = actionW
 			}
