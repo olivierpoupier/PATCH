@@ -19,3 +19,23 @@ type NetworkStateMsg struct {
 	Connected bool
 	SSID      string
 }
+
+// VolumeEntry describes a mounted volume for the file system view, neutral
+// to the source tab.
+type VolumeEntry struct {
+	Label      string
+	MountPoint string
+	TotalBytes int64
+	UsedBytes  int64
+}
+
+// OpenFSViewMsg is emitted by any tab to request the app open the file
+// system view. Multiple entries trigger a synthetic volume-picker root.
+type OpenFSViewMsg struct {
+	Entries []VolumeEntry
+	Source  string
+}
+
+// CloseFSViewMsg is emitted by the file system view when it wants the app
+// to tear down the overlay.
+type CloseFSViewMsg struct{}

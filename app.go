@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 
+	"github.com/olivierpoupier/patch/fsview"
 	"github.com/olivierpoupier/patch/tui"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,18 +11,22 @@ import (
 )
 
 type model struct {
-	tabs         []tui.Tab
-	activeTab    int
-	focusContent bool
-	width        int
-	height       int
-	theme        *tui.Theme
+	tabs          []tui.Tab
+	activeTab     int
+	focusContent  bool
+	width         int
+	height        int
+	theme         *tui.Theme
+	fsview        *fsview.Model
+	fsOpen        bool
+	fsReturnFocus bool
 }
 
 func newModel(theme *tui.Theme, tabs []tui.Tab) model {
 	return model{
-		tabs:  tabs,
-		theme: theme,
+		tabs:   tabs,
+		theme:  theme,
+		fsview: fsview.New(theme),
 	}
 }
 
@@ -62,15 +67,60 @@ func (m *model) switchTab(newIdx int) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *model) openFSView(msg tui.OpenFSViewMsg) tea.Cmd {
+	m.fsReturnFocus = m.focusContent
+	if m.focusContent {
+		tab, _ := m.tabs[m.activeTab].SetFocused(false)
+		m.tabs[m.activeTab] = tab
+		m.focusContent = false
+	}
+	m.fsview.SetSize(m.width, m.height)
+	cmd := m.fsview.Open(msg.Entries)
+	m.fsOpen = true
+	return cmd
+}
+
+func (m *model) closeFSView() tea.Cmd {
+	m.fsview.Close()
+	m.fsOpen = false
+	if m.fsReturnFocus {
+		tab, cmd := m.tabs[m.activeTab].SetFocused(true)
+		m.tabs[m.activeTab] = tab
+		m.focusContent = true
+		return cmd
+	}
+	return nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Propagate to all tabs so they can cache dimensions.
+		if m.fsview != nil {
+			m.fsview.SetSize(msg.Width, msg.Height)
+		}
+
+	case tui.OpenFSViewMsg:
+		cmd := m.openFSView(msg)
+		return m, cmd
+
+	case tui.CloseFSViewMsg:
+		cmd := m.closeFSView()
+		return m, cmd
 
 	case tea.KeyPressMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+		if m.fsOpen {
+			fsm, cmd := m.fsview.Update(msg)
+			m.fsview = fsm
+			return m, cmd
+		}
+
+		if msg.String() == "q" {
 			return m, tea.Quit
 		}
 
@@ -115,9 +165,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Broadcast non-key messages to all tabs.
-	// Each tab ignores messages it doesn't own (unexported types in separate packages).
+	// Non-key messages.
 	var cmds []tea.Cmd
+	if m.fsOpen {
+		fsm, fsCmd := m.fsview.Update(msg)
+		m.fsview = fsm
+		if fsCmd != nil {
+			cmds = append(cmds, fsCmd)
+		}
+	}
+	// Broadcast to all tabs. Each tab ignores messages it doesn't own.
 	for i, t := range m.tabs {
 		updated, cmd := t.Update(msg)
 		m.tabs[i] = updated
@@ -131,6 +188,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("")
+	}
+
+	if m.fsOpen {
+		v := tea.NewView(m.fsview.View(m.width, m.height))
+		v.AltScreen = true
+		return v
 	}
 
 	contentWidth := m.width - 2

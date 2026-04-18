@@ -105,17 +105,15 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 					m.cursor++
 				}
 			}
-		case "enter", " ":
-			if !m.tableView && m.cursor < len(m.nodes) {
-				node := m.nodes[m.cursor]
-				if node.HasChildren {
-					m.collapsed[node.NodeID] = !m.collapsed[node.NodeID]
-					m.rebuildNodes()
-					if m.cursor >= len(m.nodes) {
-						m.cursor = len(m.nodes) - 1
-					}
+		case "enter":
+			if vols := m.storageVolumesForCursor(); vols != nil {
+				return m, func() tea.Msg {
+					return tui.OpenFSViewMsg{Entries: vols, Source: "usb"}
 				}
 			}
+			m.toggleCollapseAtCursor()
+		case " ":
+			m.toggleCollapseAtCursor()
 		}
 	}
 	return m, nil
@@ -175,13 +173,14 @@ func (m *Model) View(width, height int) string {
 	if m.tableView {
 		bindings = []components.KeyBinding{
 			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "enter", Description: "open volume"},
 			{Keys: "t", Description: "tree view"},
 			{Keys: "esc", Description: "back"},
 		}
 	} else {
 		bindings = []components.KeyBinding{
 			{Keys: "↑↓/jk", Description: "navigate"},
-			{Keys: "enter", Description: "collapse/expand"},
+			{Keys: "enter", Description: "open/expand"},
 			{Keys: "t", Description: "table view"},
 			{Keys: "esc", Description: "back"},
 		}
@@ -316,6 +315,63 @@ func (m *Model) rebuildNodes() {
 	if m.cursor >= len(m.nodes) && len(m.nodes) > 0 {
 		m.cursor = len(m.nodes) - 1
 	}
+}
+
+// toggleCollapseAtCursor flips the expand/collapse state of the tree node
+// under the cursor. No-op in table view or on non-expandable nodes.
+func (m *Model) toggleCollapseAtCursor() {
+	if m.tableView || m.cursor >= len(m.nodes) {
+		return
+	}
+	node := m.nodes[m.cursor]
+	if !node.HasChildren {
+		return
+	}
+	m.collapsed[node.NodeID] = !m.collapsed[node.NodeID]
+	m.rebuildNodes()
+	if m.cursor >= len(m.nodes) {
+		m.cursor = len(m.nodes) - 1
+	}
+}
+
+// storageVolumesForCursor returns the volume list for the currently selected
+// row if it is a storage device with mounted volumes; otherwise nil.
+func (m *Model) storageVolumesForCursor() []tui.VolumeEntry {
+	var dev *USBDevice
+	if m.tableView {
+		if m.tableCursor < 0 || m.tableCursor >= len(m.tableRows) {
+			return nil
+		}
+		dev = m.tableRows[m.tableCursor].Device
+	} else {
+		if m.cursor < 0 || m.cursor >= len(m.nodes) {
+			return nil
+		}
+		node := m.nodes[m.cursor]
+		if node.IsHeader || node.IsBus {
+			return nil
+		}
+		dev = node.Device
+	}
+	if dev == nil || !dev.HasVolume || len(dev.Volumes) == 0 {
+		return nil
+	}
+	out := make([]tui.VolumeEntry, 0, len(dev.Volumes))
+	for _, v := range dev.Volumes {
+		if v.MountPoint == "" {
+			continue
+		}
+		out = append(out, tui.VolumeEntry{
+			Label:      v.VolumeName,
+			MountPoint: v.MountPoint,
+			TotalBytes: v.TotalBytes,
+			UsedBytes:  v.UsedBytes,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (m *Model) rebuildTableRows() {
