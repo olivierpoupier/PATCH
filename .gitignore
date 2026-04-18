@@ -5,6 +5,8 @@
 *.so
 *.dylib
 patch
+patch.app/
+_CodeSignature/
 
 # Test binary
 *.test

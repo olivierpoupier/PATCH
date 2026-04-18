@@ -7,6 +7,7 @@ import (
 
 	"github.com/olivierpoupier/patch/bluetooth"
 	"github.com/olivierpoupier/patch/logging"
+	"github.com/olivierpoupier/patch/platform"
 	"github.com/olivierpoupier/patch/tui"
 	"github.com/olivierpoupier/patch/usb"
 	"github.com/olivierpoupier/patch/wifi"
@@ -24,11 +25,23 @@ func main() {
 
 	slog.Info("starting patch")
 
-	m := newModel([]tui.Tab{
-		usb.New(),
-		bluetooth.New(),
-		wifi.New(),
-	})
+	theme := tui.NewTheme()
+	caps := platform.Detect()
+
+	var tabs []tui.Tab
+	if caps.HasUSB {
+		tabs = append(tabs, usb.New(theme))
+	}
+	if caps.HasBluetooth {
+		tabs = append(tabs, bluetooth.New(theme))
+	}
+	if caps.HasWifi {
+		tabs = append(tabs, bluetooth.New(theme))
+	}
+
+
+	m := newModel(theme, tabs)
+
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		slog.Error("program exited with error", "error", err)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -54,6 +55,27 @@ type spTBReceptacle struct {
 	CurrentSpeed string `json:"current_speed_key"`
 }
 
+// JSON structures matching system_profiler SPStorageDataType output.
+type spStorageOutput struct {
+	SPStorageDataType []spStorageVolume `json:"SPStorageDataType"`
+}
+
+type spStorageVolume struct {
+	Name             string          `json:"_name"`
+	BSDName          string          `json:"bsd_name"`
+	FileSystem       string          `json:"file_system"`
+	SizeInBytes      int64           `json:"size_in_bytes"`
+	FreeSpaceInBytes int64           `json:"free_space_in_bytes"`
+	MountPoint       string          `json:"mount_point"`
+	PhysicalDrive    spPhysicalDrive `json:"physical_drive"`
+}
+
+type spPhysicalDrive struct {
+	DeviceName     string `json:"device_name"`
+	IsInternalDisk string `json:"is_internal_disk"`
+	Protocol       string `json:"protocol"`
+}
+
 // USBScanner queries macOS system_profiler for USB device information.
 type USBScanner struct {
 	buses []USBBus
@@ -89,7 +111,27 @@ func (s *USBScanner) Refresh() error {
 		slog.Debug("thunderbolt profiler unavailable", "error", tbErr)
 	}
 
+	// Storage volumes — best-effort.
+	var usbVolumes []spStorageVolume
+	storageOut, storErr := exec.Command("system_profiler", "SPStorageDataType", "-json").Output()
+	if storErr == nil {
+		var storParsed spStorageOutput
+		if json.Unmarshal(storageOut, &storParsed) == nil {
+			for _, vol := range storParsed.SPStorageDataType {
+				if strings.EqualFold(vol.PhysicalDrive.Protocol, "USB") {
+					usbVolumes = append(usbVolumes, vol)
+				}
+			}
+		}
+	} else {
+		slog.Debug("storage profiler unavailable", "error", storErr)
+	}
+
 	buses := convertBuses(usbParsed)
+
+	if len(usbVolumes) > 0 {
+		correlateVolumes(buses, usbVolumes)
+	}
 
 	s.mu.Lock()
 	s.buses = buses
@@ -158,4 +200,39 @@ func parseTBPorts(parsed spTBOutput) []ThunderboltPort {
 		}
 	}
 	return ports
+}
+
+func correlateVolumes(buses []USBBus, volumes []spStorageVolume) {
+	volsByDevice := make(map[string][]spStorageVolume)
+	for _, vol := range volumes {
+		key := strings.TrimSpace(vol.PhysicalDrive.DeviceName)
+		volsByDevice[key] = append(volsByDevice[key], vol)
+	}
+	for i := range buses {
+		for _, dev := range buses[i].Devices {
+			attachVolumes(dev, volsByDevice)
+		}
+	}
+}
+
+func attachVolumes(dev *USBDevice, volsByDevice map[string][]spStorageVolume) {
+	key := strings.TrimSpace(dev.Name)
+	if vols, ok := volsByDevice[key]; ok {
+		dev.HasVolume = true
+		for _, vol := range vols {
+			used := vol.SizeInBytes - vol.FreeSpaceInBytes
+			if used < 0 {
+				used = 0
+			}
+			dev.Volumes = append(dev.Volumes, VolumeInfo{
+				VolumeName: vol.Name,
+				TotalBytes: vol.SizeInBytes,
+				UsedBytes:  used,
+				MountPoint: vol.MountPoint,
+			})
+		}
+	}
+	for _, child := range dev.Children {
+		attachVolumes(child, volsByDevice)
+	}
 }
