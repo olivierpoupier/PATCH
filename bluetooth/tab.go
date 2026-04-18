@@ -6,15 +6,16 @@ import (
 	"strings"
 
 	"github.com/olivierpoupier/patch/tui"
+	"github.com/olivierpoupier/patch/tui/components"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 )
 
 // Model is the Bluetooth tab's Bubbletea model.
 type Model struct {
+	theme        *tui.Theme
 	adapter      *CompositeAdapter
 	adapterInfo  AdapterInfo
 	devices      []DeviceInfo
@@ -27,14 +28,17 @@ type Model struct {
 	focused      bool
 	initialized  bool
 	done         chan struct{}
-	viewport     viewport.Model
+	scroll       components.ScrollableView
 	scrollOffset int // marquee scroll position for selected row
 	lastCursor   int // track cursor changes to reset scroll
 }
 
 // New creates a new Bluetooth tab model.
-func New() *Model {
-	return &Model{}
+func New(theme *tui.Theme) *Model {
+	return &Model{
+		theme:  theme,
+		scroll: components.NewScrollableView(theme),
+	}
 }
 
 // Name returns the tab display name.
@@ -211,11 +215,11 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 // View renders the tab content with a fixed header, scrollable body, and fixed footer.
 func (m *Model) View(width, height int) string {
 	if !m.initialized {
-		return "  Initializing Bluetooth..."
+		return m.theme.Dim.Render("  Initializing Bluetooth...")
 	}
 
 	if m.err != nil && m.adapter == nil {
-		return fmt.Sprintf("  Bluetooth error: %v", m.err)
+		return m.theme.ErrorText.Render(fmt.Sprintf("  Bluetooth error: %v", m.err))
 	}
 
 	// Render header (adapter info).
@@ -224,15 +228,18 @@ func (m *Model) View(width, height int) string {
 	headerStr := header.String()
 
 	// Render footer (error + help).
-	var footer strings.Builder
+	var footerParts []string
 	if m.err != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
-		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
-		footer.WriteString("\n")
+		footerParts = append(footerParts, components.RenderError(m.theme, m.err, width))
 	}
-	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  enter connect/disconnect  p toggle power  esc back"))
-	footerStr := footer.String()
+	bindings := []components.KeyBinding{
+		{Keys: "↑↓/jk", Description: "navigate"},
+		{Keys: "enter", Description: "connect/disconnect"},
+		{Keys: "p", Description: "toggle power"},
+		{Keys: "esc", Description: "back"},
+	}
+	footerParts = append(footerParts, components.RenderFooter(m.theme, bindings, width))
+	footerStr := strings.Join(footerParts, "\n")
 
 	// Calculate body height for the viewport.
 	headerHeight := lipgloss.Height(headerStr)
@@ -248,72 +255,54 @@ func (m *Model) View(width, height int) string {
 	var body strings.Builder
 	m.renderDeviceTable(&body, tableWidth)
 	bodyStr := body.String()
-	contentLines := lipgloss.Height(bodyStr)
 	// Pad below the table so the last row can scroll up and reveal the bottom border.
 	for i := 0; i < bodyHeight/2; i++ {
 		bodyStr += "\n"
 	}
 
-	// Configure viewport for scrollable body.
-	m.viewport.SetWidth(tableWidth)
-	m.viewport.SetHeight(bodyHeight)
-	m.viewport.SetContent(bodyStr)
+	// Configure scrollable view.
+	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetContent(bodyStr)
 
-	// Auto-scroll to keep the cursor in the middle ~60% of the viewport.
-	// This acts like vim's scrolloff: 20% margin on top and bottom.
+	// Auto-scroll to keep the cursor in view.
 	if len(m.devices) > 0 {
 		rowLine := m.cursor + 2 // +2 for top border + header row
-		vpHeight := m.viewport.Height()
-		margin := vpHeight / 5 // 20% margin on each side
-		if margin < 1 {
-			margin = 1
-		}
-		yOffset := m.viewport.YOffset()
-		if rowLine < yOffset+margin {
-			m.viewport.SetYOffset(rowLine - margin)
-		} else if rowLine >= yOffset+vpHeight-margin {
-			m.viewport.SetYOffset(rowLine - vpHeight + margin + 1)
-		}
-		// Clamp to top.
-		if m.viewport.YOffset() < 0 {
-			m.viewport.SetYOffset(0)
-		}
+		m.scroll = m.scroll.ScrollToLine(rowLine)
 	}
 
 	// Render viewport with scrollbar overlay.
-	vpView := m.viewport.View()
-	vpView = m.overlayScrollbar(vpView, bodyHeight, contentLines)
+	vpView := m.scroll.View()
 
 	return headerStr + "\n" + vpView + "\n" + footerStr
 }
 
 func (m *Model) renderAdapterInfo(b *strings.Builder, width int) {
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	theme := m.theme
 
 	name := m.adapterInfo.Name
 	if name == "" {
 		name = "Unknown"
 	}
 
-	powerIndicator := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Render("● Off")
+	powerColor := theme.Error
+	powerText := "● Off"
 	if m.adapterInfo.Powered {
-		powerIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Render("● On")
+		powerColor = theme.Active
+		powerText = "● On"
 	}
 
 	b.WriteString(fmt.Sprintf("  %s %s    %s %s\n",
-		labelStyle.Render("Adapter:"),
-		valueStyle.Render(name),
-		labelStyle.Render("Power:"),
-		powerIndicator,
+		theme.Label.Render("Adapter:"),
+		theme.Value.Render(name),
+		theme.Label.Render("Power:"),
+		lipgloss.NewStyle().Foreground(powerColor).Render(powerText),
 	))
 	b.WriteString(fmt.Sprintf("  %s %s    %s\n",
-		labelStyle.Render("Address:"),
-		valueStyle.Render(m.adapterInfo.Address),
+		theme.Label.Render("Address:"),
+		theme.Value.Render(m.adapterInfo.Address),
 		func() string {
 			if m.adapterInfo.Discovering {
-				return dimStyle.Render("Scanning...")
+				return theme.Dim.Render("Scanning...")
 			}
 			return ""
 		}(),
@@ -321,6 +310,8 @@ func (m *Model) renderAdapterInfo(b *strings.Builder, width int) {
 }
 
 func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
+	theme := m.theme
+
 	// Build row data first so we can measure content widths.
 	type rowData struct {
 		name, typ, transport, status string
@@ -354,29 +345,14 @@ func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
 		}
 	}
 
-	// Measure max content width per column (headers included).
 	headers := [4]string{"Name", "Type", "Link", "Status"}
-	maxContent := [4]int{}
-	for i, h := range headers {
-		maxContent[i] = len(h)
-	}
-	for _, r := range rowInfos {
-		cols := [4]string{r.name, r.typ, r.transport, r.status}
-		for i, c := range cols {
-			if w := len(c); w > maxContent[i] {
-				maxContent[i] = w
-			}
-		}
-	}
 
 	// Add horizontal margin: 2 chars on each side.
 	const tableMargin = 2
 	tableWidth := width - tableMargin*2
 
-	// Width budget: total table width = sum(colWidths) + borderOverhead.
-	// Borders: left(1) + right(1) + 3 column separators = 5.
 	const borderOverhead = 5
-	const cellPadding = 2 // Padding(0, 1) = 1 left + 1 right
+	const cellPadding = 2
 
 	available := tableWidth - borderOverhead
 	if available < 40 {
@@ -387,14 +363,12 @@ func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
 	nameW := available * 40 / 100
 	typeW := available * 20 / 100
 	transportW := available * 20 / 100
-	statusW := available - nameW - typeW - transportW // remainder to avoid rounding loss
+	statusW := available - nameW - typeW - transportW
 
-	// Enforce minimums.
 	if nameW < 10+cellPadding {
 		nameW = 10 + cellPadding
 	}
 
-	// The usable content width inside the Name column (for truncation).
 	nameContentW := nameW - cellPadding
 
 	// Build rows with truncation / marquee for the Name column.
@@ -404,23 +378,17 @@ func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
 		name := r.name
 		if len(name) > nameContentW {
 			if m.focused && i == cursor {
-				// Marquee scroll for the selected row.
-				name = scrollText(name, nameContentW, m.scrollOffset)
+				name = components.ScrollText(name, nameContentW, m.scrollOffset)
 			} else {
-				// Truncate with ellipsis.
-				name = truncateText(name, nameContentW)
+				name = components.TruncateText(name, nameContentW)
 			}
 		}
 		rows = append(rows, []string{name, r.typ, r.transport, r.status})
 	}
 
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor).Padding(0, 1)
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("#04B575")).Foreground(lipgloss.Color("#000000")).Padding(0, 1)
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
-
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(tui.ActiveColor)).
+		BorderStyle(theme.Border).
 		Width(tableWidth).
 		Headers(headers[0], headers[1], headers[2], headers[3]).
 		Rows(rows...).
@@ -438,26 +406,26 @@ func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
 			}
 
 			if row == table.HeaderRow {
-				return headerStyle.Width(w)
+				return theme.TableHeader.Width(w)
 			}
 
 			if m.focused && row == cursor {
-				return selectedStyle.Width(w)
+				return theme.Selected.Width(w)
 			}
 
-			base := normalStyle.Width(w)
+			base := theme.TableCell.Width(w)
 			if len(m.devices) == 0 {
-				return base.Foreground(tui.InactiveColor)
+				return base.Foreground(theme.Inactive)
 			}
 
 			if col == 3 && row < len(m.devices) {
 				dev := m.devices[row]
 				if dev.Connected {
-					return base.Foreground(lipgloss.Color("#04B575"))
+					return base.Foreground(theme.Active)
 				} else if dev.Paired {
-					return base.Foreground(lipgloss.Color("#FFAA00"))
+					return base.Foreground(theme.Warning)
 				}
-				return base.Foreground(tui.InactiveColor)
+				return base.Foreground(theme.Inactive)
 			}
 
 			return base
@@ -469,89 +437,4 @@ func (m *Model) renderDeviceTable(b *strings.Builder, width int) {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-}
-
-// truncateText truncates s to maxWidth characters, appending "…" if truncated.
-func truncateText(s string, maxWidth int) string {
-	if maxWidth <= 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
-		return s
-	}
-	return string(runes[:maxWidth-1]) + "…"
-}
-
-// scrollText produces a sliding window of visibleWidth over s, creating a marquee effect.
-func scrollText(s string, visibleWidth int, offset int) string {
-	runes := []rune(s)
-	if len(runes) <= visibleWidth {
-		return s
-	}
-	// Add a gap and repeat to create smooth wraparound.
-	gap := []rune("   ")
-	looped := append(runes, append(gap, runes...)...)
-	total := len(runes) + len(gap)
-	start := offset % total
-	end := start + visibleWidth
-	if end > len(looped) {
-		end = len(looped)
-	}
-	return string(looped[start:end])
-}
-
-// overlayScrollbar renders a scrollbar track on the right edge of the viewport
-// content. Only shown when the content is taller than the viewport.
-func (m *Model) overlayScrollbar(vpView string, vpHeight int, contentLines int) string {
-	totalLines := contentLines
-	if totalLines <= vpHeight {
-		return vpView // no scrollbar needed
-	}
-
-	trackStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	thumbStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
-
-	// Calculate thumb size and position.
-	thumbSize := vpHeight * vpHeight / totalLines
-	if thumbSize < 1 {
-		thumbSize = 1
-	}
-	scrollable := totalLines - vpHeight
-	if scrollable < 0 {
-		scrollable = 0
-	}
-	yOffset := m.viewport.YOffset()
-	if yOffset > scrollable {
-		yOffset = scrollable
-	}
-	thumbPos := 0
-	if scrollable > 0 {
-		if yOffset >= scrollable {
-			// Pin thumb to the bottom when fully scrolled.
-			thumbPos = vpHeight - thumbSize
-		} else {
-			thumbPos = yOffset * (vpHeight - thumbSize) / scrollable
-		}
-	}
-
-	lines := strings.Split(vpView, "\n")
-	// The viewport output may have a trailing newline producing an extra empty element.
-	if len(lines) > vpHeight {
-		lines = lines[:vpHeight]
-	}
-
-	var b strings.Builder
-	for i := 0; i < len(lines); i++ {
-		b.WriteString(lines[i])
-		if i >= thumbPos && i < thumbPos+thumbSize {
-			b.WriteString(thumbStyle.Render("┃"))
-		} else {
-			b.WriteString(trackStyle.Render("│"))
-		}
-		if i < len(lines)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
 }

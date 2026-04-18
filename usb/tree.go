@@ -19,6 +19,16 @@ type USBDevice struct {
 	SerialNumber string
 	Type         DeviceType
 	Children     []*USBDevice
+	HasVolume    bool
+	Volumes      []VolumeInfo
+}
+
+// VolumeInfo holds storage volume data for a USB device.
+type VolumeInfo struct {
+	VolumeName string
+	TotalBytes int64
+	UsedBytes  int64
+	MountPoint string
 }
 
 // USBBus represents a USB host controller bus.
@@ -191,6 +201,16 @@ func flattenDevices(nodes *[]TreeNode, devices []*USBDevice, depth int, ancestor
 }
 
 func formatDeviceName(dev *USBDevice) string {
+	if dev.HasVolume && len(dev.Volumes) > 0 {
+		name := dev.Volumes[0].VolumeName
+		if len(dev.Volumes) > 1 {
+			name = fmt.Sprintf("%s (+%d)", name, len(dev.Volumes)-1)
+		}
+		if dev.VendorName != "" {
+			return fmt.Sprintf("%s (%s)", name, dev.VendorName)
+		}
+		return name
+	}
 	if dev.VendorName != "" {
 		return fmt.Sprintf("%s (%s)", dev.Name, dev.VendorName)
 	}
@@ -216,23 +236,91 @@ func countDevicesIn(devices []*USBDevice) int {
 	return n
 }
 
-// truncateText truncates s to maxWidth runes, appending "…" if truncated.
-func truncateText(s string, maxWidth int) string {
-	if maxWidth <= 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
-		return s
-	}
-	return string(runes[:maxWidth-1]) + "…"
+// TableRow is a flat row for the peripheral table view.
+type TableRow struct {
+	Name    string
+	Type    string
+	Port    string
+	Storage string
+	Device  *USBDevice
 }
 
-// padRight pads s with spaces to width. If s is longer, it is returned as-is.
-func padRight(s string, width int) string {
-	r := []rune(s)
-	if len(r) >= width {
-		return s
+// collectTableRows extracts leaf, removable peripherals into a flat table.
+func collectTableRows(groups []PortGroup) []TableRow {
+	var rows []TableRow
+	for _, g := range groups {
+		for _, bus := range g.Buses {
+			collectDeviceRows(&rows, bus.Devices, g.Label)
+		}
 	}
-	return s + strings.Repeat(" ", width-len(r))
+	return rows
 }
+
+func collectDeviceRows(rows *[]TableRow, devices []*USBDevice, port string) {
+	for _, dev := range devices {
+		// Skip hubs and built-in/non-removable devices as rows,
+		// but always recurse into their children.
+		if dev.Type == DeviceTypeHub ||
+			dev.HardwareType == "Built-in" ||
+			dev.HardwareType == "Non-removable" {
+			collectDeviceRows(rows, dev.Children, port)
+			continue
+		}
+		*rows = append(*rows, TableRow{
+			Name:    formatDeviceName(dev),
+			Type:    dev.Type.String(),
+			Port:    port,
+			Storage: formatStorageBar(dev),
+			Device:  dev,
+		})
+		// Also collect any children that aren't hubs/built-in.
+		collectDeviceRows(rows, dev.Children, port)
+	}
+}
+
+func formatStorageBar(dev *USBDevice) string {
+	if !dev.HasVolume || len(dev.Volumes) == 0 {
+		return ""
+	}
+	var totalBytes, usedBytes int64
+	for _, v := range dev.Volumes {
+		totalBytes += v.TotalBytes
+		usedBytes += v.UsedBytes
+	}
+	if totalBytes <= 0 {
+		return ""
+	}
+	pct := float64(usedBytes) / float64(totalBytes) * 100
+	if pct > 100 {
+		pct = 100
+	}
+	const barWidth = 8
+	filled := int(pct / 100 * float64(barWidth))
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	return fmt.Sprintf("%s %3.0f%% (%s/%s)", bar, pct, formatBytes(usedBytes), formatBytes(totalBytes))
+}
+
+func formatBytes(b int64) string {
+	const (
+		KB = 1000
+		MB = KB * 1000
+		GB = MB * 1000
+		TB = GB * 1000
+	)
+	switch {
+	case b >= TB:
+		return fmt.Sprintf("%.1f TB", float64(b)/float64(TB))
+	case b >= GB:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(GB))
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+

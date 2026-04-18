@@ -5,14 +5,16 @@ import (
 	"strings"
 
 	"github.com/olivierpoupier/patch/tui"
+	"github.com/olivierpoupier/patch/tui/components"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 )
 
 // Model is the USB tab's Bubbletea model.
 type Model struct {
+	theme       *tui.Theme
 	scanner     *USBScanner
 	groups      []PortGroup
 	nodes       []TreeNode
@@ -24,13 +26,18 @@ type Model struct {
 	active      bool
 	focused     bool
 	initialized bool
-	viewport    viewport.Model
+	scroll      components.ScrollableView
+	tableView   bool
+	tableRows   []TableRow
+	tableCursor int
 }
 
 // New creates a new USB tab model.
-func New() *Model {
+func New(theme *tui.Theme) *Model {
 	return &Model{
+		theme:     theme,
 		collapsed: make(map[string]bool),
+		scroll:    components.NewScrollableView(theme),
 	}
 }
 
@@ -53,6 +60,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 	case dataMsg:
 		m.groups = msg.groups
 		m.rebuildNodes()
+		m.rebuildTableRows()
 		m.err = nil
 		return m, nil
 
@@ -74,25 +82,38 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
+		case "t":
+			m.tableView = !m.tableView
+			m.scroll = m.scroll.SetYOffset(0)
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.nodes)-1 {
-				m.cursor++
-			}
-		case "enter", " ":
-			if m.cursor < len(m.nodes) {
-				node := m.nodes[m.cursor]
-				if node.HasChildren {
-					m.collapsed[node.NodeID] = !m.collapsed[node.NodeID]
-					m.rebuildNodes()
-					if m.cursor >= len(m.nodes) {
-						m.cursor = len(m.nodes) - 1
-					}
+			if m.tableView {
+				if m.tableCursor > 0 {
+					m.tableCursor--
+				}
+			} else {
+				if m.cursor > 0 {
+					m.cursor--
 				}
 			}
+		case "down", "j":
+			if m.tableView {
+				if m.tableCursor < len(m.tableRows)-1 {
+					m.tableCursor++
+				}
+			} else {
+				if m.cursor < len(m.nodes)-1 {
+					m.cursor++
+				}
+			}
+		case "enter":
+			if vols := m.storageVolumesForCursor(); vols != nil {
+				return m, func() tea.Msg {
+					return tui.OpenFSViewMsg{Entries: vols, Source: "usb"}
+				}
+			}
+			m.toggleCollapseAtCursor()
+		case " ":
+			m.toggleCollapseAtCursor()
 		}
 	}
 	return m, nil
@@ -122,27 +143,50 @@ func (m *Model) View(width, height int) string {
 	m.height = height
 
 	if !m.initialized {
-		return "  Initializing USB..."
+		return m.theme.Dim.Render("  Initializing USB...")
 	}
 	if m.err != nil && m.scanner == nil {
-		return fmt.Sprintf("  USB error: %v", m.err)
+		return m.theme.ErrorText.Render(fmt.Sprintf("  USB error: %v", m.err))
 	}
 
 	// Header.
-	var header strings.Builder
-	m.renderHeader(&header)
-	headerStr := header.String()
+	total := countDevices(m.groups)
+	ports := len(m.groups)
+	viewLabel := "Tree"
+	if m.tableView {
+		viewLabel = "Table"
+	}
+	headerStr := components.RenderHeader(m.theme, [][]components.HeaderField{
+		{
+			{Label: "Devices", Value: fmt.Sprintf("%d", total)},
+			{Label: "Ports", Value: fmt.Sprintf("%d", ports)},
+			{Label: "View", Value: viewLabel},
+		},
+	}, width)
 
 	// Footer.
-	var footer strings.Builder
+	var footerParts []string
 	if m.err != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
-		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
-		footer.WriteString("\n")
+		footerParts = append(footerParts, components.RenderError(m.theme, m.err, width))
 	}
-	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	footer.WriteString(helpStyle.Render("  ↑↓/jk navigate  enter collapse/expand  esc back"))
-	footerStr := footer.String()
+	var bindings []components.KeyBinding
+	if m.tableView {
+		bindings = []components.KeyBinding{
+			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "enter", Description: "open volume"},
+			{Keys: "t", Description: "tree view"},
+			{Keys: "esc", Description: "back"},
+		}
+	} else {
+		bindings = []components.KeyBinding{
+			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "enter", Description: "open/expand"},
+			{Keys: "t", Description: "table view"},
+			{Keys: "esc", Description: "back"},
+		}
+	}
+	footerParts = append(footerParts, components.RenderFooter(m.theme, bindings, width))
+	footerStr := strings.Join(footerParts, "\n")
 
 	// Body height.
 	headerHeight := lipgloss.Height(headerStr)
@@ -152,67 +196,44 @@ func (m *Model) View(width, height int) string {
 		bodyHeight = 3
 	}
 
-	// Render tree.
+	// Render body.
 	tableWidth := width - 1 // reserve for scrollbar
 	var body strings.Builder
-	m.renderTree(&body, tableWidth)
+	if m.tableView {
+		m.renderTable(&body, tableWidth)
+	} else {
+		m.renderTree(&body, tableWidth)
+	}
 	bodyStr := body.String()
-	contentLines := lipgloss.Height(bodyStr)
 
 	// Pad below so the last row can scroll up.
 	for i := 0; i < bodyHeight/2; i++ {
 		bodyStr += "\n"
 	}
 
-	m.viewport.SetWidth(tableWidth)
-	m.viewport.SetHeight(bodyHeight)
-	m.viewport.SetContent(bodyStr)
+	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep cursor visible.
-	if len(m.nodes) > 0 {
-		rowLine := m.cursor
-		vpHeight := m.viewport.Height()
-		margin := vpHeight / 5
-		if margin < 1 {
-			margin = 1
-		}
-		yOffset := m.viewport.YOffset()
-		if rowLine < yOffset+margin {
-			m.viewport.SetYOffset(rowLine - margin)
-		} else if rowLine >= yOffset+vpHeight-margin {
-			m.viewport.SetYOffset(rowLine - vpHeight + margin + 1)
-		}
-		if m.viewport.YOffset() < 0 {
-			m.viewport.SetYOffset(0)
-		}
+	activeCursor := m.cursor
+	activeLen := len(m.nodes)
+	if m.tableView {
+		activeCursor = m.tableCursor
+		activeLen = len(m.tableRows)
+	}
+	if activeLen > 0 {
+		m.scroll = m.scroll.ScrollToLine(activeCursor)
 	}
 
-	vpView := m.viewport.View()
-	vpView = m.overlayScrollbar(vpView, bodyHeight, contentLines)
+	vpView := m.scroll.View()
 
 	return headerStr + "\n" + vpView + "\n" + footerStr
 }
 
-func (m *Model) renderHeader(b *strings.Builder) {
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-
-	total := countDevices(m.groups)
-	ports := len(m.groups)
-
-	b.WriteString(fmt.Sprintf("  %s %s    %s %s\n",
-		labelStyle.Render("Devices:"),
-		valueStyle.Render(fmt.Sprintf("%d", total)),
-		labelStyle.Render("Ports:"),
-		valueStyle.Render(fmt.Sprintf("%d", ports)),
-	))
-}
-
 func (m *Model) renderTree(b *strings.Builder, width int) {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	selectedBg := lipgloss.NewStyle().Background(tui.ActiveColor).Foreground(lipgloss.Color("#000000"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	selectedBg := m.theme.Selected
+	normalStyle := m.theme.Value
+	dimStyle := m.theme.Dim
 
 	typeW := 12
 
@@ -222,9 +243,9 @@ func (m *Model) renderTree(b *strings.Builder, width int) {
 		if node.IsHeader {
 			text := "  " + node.Label
 			if isSelected {
-				b.WriteString(selectedBg.Render(padRight(text, width)))
+				b.WriteString(selectedBg.Render(components.PadRight(text, width)))
 			} else {
-				b.WriteString(headerStyle.Render(text))
+				b.WriteString(m.theme.Label.Render(text))
 			}
 			b.WriteString("\n")
 			continue
@@ -267,26 +288,23 @@ func (m *Model) renderTree(b *strings.Builder, width int) {
 		}
 
 		nameText := node.Label
-		if node.IsBus {
-			nameText = node.Label
-		}
 		if len([]rune(nameText)) > nameW {
-			nameText = truncateText(nameText, nameW)
+			nameText = components.TruncateText(nameText, nameW)
 		}
 
 		if isSelected {
-			content := padRight(nameText, nameW) + "  " + padRight(node.TypeLabel, typeW)
+			content := components.PadRight(nameText, nameW) + "  " + components.PadRight(node.TypeLabel, typeW)
 			b.WriteString(prefixStr)
-			b.WriteString(selectedBg.Render(padRight(content, width-prefixWidth)))
+			b.WriteString(selectedBg.Render(components.PadRight(content, width-prefixWidth)))
 		} else {
 			style := normalStyle
 			if node.IsBuiltIn || node.IsBus {
 				style = dimStyle
 			}
 			b.WriteString(prefixStr)
-			b.WriteString(style.Render(padRight(nameText, nameW)))
+			b.WriteString(style.Render(components.PadRight(nameText, nameW)))
 			b.WriteString("  ")
-			b.WriteString(dimStyle.Render(padRight(node.TypeLabel, typeW)))
+			b.WriteString(dimStyle.Render(components.PadRight(node.TypeLabel, typeW)))
 		}
 		b.WriteString("\n")
 	}
@@ -299,52 +317,157 @@ func (m *Model) rebuildNodes() {
 	}
 }
 
-// overlayScrollbar renders a scrollbar track on the right edge of the viewport.
-func (m *Model) overlayScrollbar(vpView string, vpHeight int, contentLines int) string {
-	if contentLines <= vpHeight {
-		return vpView
+// toggleCollapseAtCursor flips the expand/collapse state of the tree node
+// under the cursor. No-op in table view or on non-expandable nodes.
+func (m *Model) toggleCollapseAtCursor() {
+	if m.tableView || m.cursor >= len(m.nodes) {
+		return
 	}
+	node := m.nodes[m.cursor]
+	if !node.HasChildren {
+		return
+	}
+	m.collapsed[node.NodeID] = !m.collapsed[node.NodeID]
+	m.rebuildNodes()
+	if m.cursor >= len(m.nodes) {
+		m.cursor = len(m.nodes) - 1
+	}
+}
 
-	trackStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	thumbStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
+// storageVolumesForCursor returns the volume list for the currently selected
+// row if it is a storage device with mounted volumes; otherwise nil.
+func (m *Model) storageVolumesForCursor() []tui.VolumeEntry {
+	var dev *USBDevice
+	if m.tableView {
+		if m.tableCursor < 0 || m.tableCursor >= len(m.tableRows) {
+			return nil
+		}
+		dev = m.tableRows[m.tableCursor].Device
+	} else {
+		if m.cursor < 0 || m.cursor >= len(m.nodes) {
+			return nil
+		}
+		node := m.nodes[m.cursor]
+		if node.IsHeader || node.IsBus {
+			return nil
+		}
+		dev = node.Device
+	}
+	if dev == nil || !dev.HasVolume || len(dev.Volumes) == 0 {
+		return nil
+	}
+	out := make([]tui.VolumeEntry, 0, len(dev.Volumes))
+	for _, v := range dev.Volumes {
+		if v.MountPoint == "" {
+			continue
+		}
+		out = append(out, tui.VolumeEntry{
+			Label:      v.VolumeName,
+			MountPoint: v.MountPoint,
+			TotalBytes: v.TotalBytes,
+			UsedBytes:  v.UsedBytes,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
-	thumbSize := vpHeight * vpHeight / contentLines
-	if thumbSize < 1 {
-		thumbSize = 1
+func (m *Model) rebuildTableRows() {
+	m.tableRows = collectTableRows(m.groups)
+	if m.tableCursor >= len(m.tableRows) && len(m.tableRows) > 0 {
+		m.tableCursor = len(m.tableRows) - 1
 	}
-	scrollable := contentLines - vpHeight
-	if scrollable < 0 {
-		scrollable = 0
+}
+
+func (m *Model) renderTable(b *strings.Builder, width int) {
+	type rowData struct {
+		name, typ, port, storage, action string
 	}
-	yOffset := m.viewport.YOffset()
-	if yOffset > scrollable {
-		yOffset = scrollable
-	}
-	thumbPos := 0
-	if scrollable > 0 {
-		if yOffset >= scrollable {
-			thumbPos = vpHeight - thumbSize
-		} else {
-			thumbPos = yOffset * (vpHeight - thumbSize) / scrollable
+	var rowInfos []rowData
+
+	if len(m.tableRows) == 0 {
+		rowInfos = []rowData{{"No peripherals detected", "", "", "", ""}}
+	} else {
+		for _, r := range m.tableRows {
+			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, r.Storage, ""})
 		}
 	}
 
-	lines := strings.Split(vpView, "\n")
-	if len(lines) > vpHeight {
-		lines = lines[:vpHeight]
+	headers := [5]string{"Name", "Type", "Port", "Storage", "Action"}
+
+	const tableMargin = 2
+	tableWidth := width - tableMargin*2
+	const borderOverhead = 6
+	const cellPadding = 2
+
+	available := tableWidth - borderOverhead
+	if available < 40 {
+		available = 40
 	}
 
-	var b strings.Builder
-	for i := 0; i < len(lines); i++ {
-		b.WriteString(lines[i])
-		if i >= thumbPos && i < thumbPos+thumbSize {
-			b.WriteString(thumbStyle.Render("┃"))
-		} else {
-			b.WriteString(trackStyle.Render("│"))
-		}
-		if i < len(lines)-1 {
-			b.WriteString("\n")
-		}
+	nameW := available * 28 / 100
+	typeW := available * 12 / 100
+	portW := available * 15 / 100
+	storageW := available * 30 / 100
+	actionW := available - nameW - typeW - portW - storageW
+
+	if nameW < 10+cellPadding {
+		nameW = 10 + cellPadding
 	}
-	return b.String()
+	nameContentW := nameW - cellPadding
+
+	var rows [][]string
+	for _, r := range rowInfos {
+		name := r.name
+		if len([]rune(name)) > nameContentW {
+			name = components.TruncateText(name, nameContentW)
+		}
+		rows = append(rows, []string{name, r.typ, r.port, r.storage, r.action})
+	}
+
+	cursor := m.tableCursor
+	theme := m.theme
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(theme.Border).
+		Width(tableWidth).
+		Headers(headers[0], headers[1], headers[2], headers[3], headers[4]).
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			var w int
+			switch col {
+			case 0:
+				w = nameW
+			case 1:
+				w = typeW
+			case 2:
+				w = portW
+			case 3:
+				w = storageW
+			default:
+				w = actionW
+			}
+
+			if row == table.HeaderRow {
+				return theme.TableHeader.Width(w)
+			}
+
+			if m.focused && row == cursor {
+				return theme.Selected.Width(w)
+			}
+
+			base := theme.TableCell.Width(w)
+			if len(m.tableRows) == 0 {
+				return base.Foreground(theme.Inactive)
+			}
+			return base
+		})
+
+	for _, line := range strings.Split(t.String(), "\n") {
+		b.WriteString("  ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
 }
