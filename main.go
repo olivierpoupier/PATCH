@@ -35,8 +35,8 @@ func main() {
 	if caps.HasBluetooth {
 		tabs = append(tabs, bluetooth.New(theme))
 	}
-	if caps.HasWifi {
-		tabs = append(tabs, bluetooth.New(theme))
+	if caps.HasWiFi {
+		tabs = append(tabs, wifi.New(theme))
 	}
 
 

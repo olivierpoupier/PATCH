@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/olivierpoupier/patch/tui"
+	"github.com/olivierpoupier/patch/tui/components"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 )
@@ -27,6 +27,7 @@ const (
 
 // Model is the WiFi tab's Bubbletea model.
 type Model struct {
+	theme          *tui.Theme
 	client         *WLANClient
 	iface          InterfaceInfo
 	connection     ConnectionInfo
@@ -40,7 +41,7 @@ type Model struct {
 	focused        bool
 	initialized    bool
 	locationAuthed bool
-	viewport       viewport.Model
+	scroll         components.ScrollableView
 	connectState   connectPhase
 	connectTarget  NetworkInfo
 	passwordInput  textinput.Model
@@ -48,8 +49,11 @@ type Model struct {
 }
 
 // New creates a new WiFi tab model.
-func New() *Model {
-	return &Model{}
+func New(theme *tui.Theme) *Model {
+	return &Model{
+		theme:  theme,
+		scroll: components.NewScrollableView(theme),
+	}
 }
 
 // Name returns the tab display name.
@@ -307,42 +311,34 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 
 // View renders the tab content with a fixed header, scrollable body, and fixed footer.
 func (m *Model) View(width, height int) string {
+	m.width = width
+	m.height = height
+
 	if !m.initialized {
-		return "  Initializing WiFi..."
+		return m.theme.Dim.Render("  Initializing WiFi...")
 	}
 
 	if m.err != nil && m.client == nil {
-		return fmt.Sprintf("  WiFi error: %v", m.err)
+		return m.theme.ErrorText.Render(fmt.Sprintf("  WiFi error: %v", m.err))
 	}
 
-	// Render header (interface info).
+	// Header (interface info).
 	var header strings.Builder
 	m.renderInterfaceHeader(&header, width)
 	headerStr := header.String()
 
-	// Render footer (error + help).
-	var footer strings.Builder
-	if m.connectErr != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
-		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.connectErr)))
-		footer.WriteString("\n")
-	} else if m.err != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
-		footer.WriteString(errStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
-		footer.WriteString("\n")
-	}
-	helpStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	// Footer (error + key bindings).
+	var footerParts []string
 	switch {
-	case m.connectState == phaseConfirm || m.connectState == phasePassword:
-		footer.WriteString(helpStyle.Render("  enter confirm  esc cancel"))
-	case !m.iface.PowerOn:
-		footer.WriteString(helpStyle.Render("  p power on  esc back"))
-	default:
-		footer.WriteString(helpStyle.Render("  p power  enter connect  ↑↓/jk navigate  esc back"))
+	case m.connectErr != nil:
+		footerParts = append(footerParts, components.RenderError(m.theme, m.connectErr, width))
+	case m.err != nil:
+		footerParts = append(footerParts, components.RenderError(m.theme, m.err, width))
 	}
-	footerStr := footer.String()
+	footerParts = append(footerParts, components.RenderFooter(m.theme, m.footerBindings(), width))
+	footerStr := strings.Join(footerParts, "\n")
 
-	// Calculate body height for the viewport.
+	// Body height: subtract header, footer, and the blank separator line.
 	headerHeight := lipgloss.Height(headerStr)
 	footerHeight := lipgloss.Height(footerStr)
 	bodyHeight := height - headerHeight - footerHeight - 1
@@ -350,72 +346,51 @@ func (m *Model) View(width, height int) string {
 		bodyHeight = 3
 	}
 
-	// Render body content.
-	tableWidth := width - 1 // reserve 1 char for scrollbar track
+	// Body content.
+	tableWidth := width - 1 // reserve 1 column for the scrollbar
 	var body strings.Builder
-
 	if !m.iface.PowerOn {
-		dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
 		body.WriteString("\n")
-		body.WriteString(dimStyle.Render("  WiFi is turned off"))
+		body.WriteString(m.theme.Dim.Render("  WiFi is turned off"))
 		body.WriteString("\n")
 	} else {
 		if !m.locationAuthed {
-			warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAA00"))
-			body.WriteString(warnStyle.Render("  ⚠ Location Services required for SSID visibility."))
+			warn := m.theme.Value.Foreground(m.theme.Warning)
+			body.WriteString(warn.Render("  ⚠ Location Services required for SSID visibility."))
 			body.WriteString("\n")
-			body.WriteString(warnStyle.Render("  Grant access when prompted, or enable patch in:"))
+			body.WriteString(warn.Render("  Grant access when prompted, or enable patch in:"))
 			body.WriteString("\n")
-			body.WriteString(warnStyle.Render("  System Settings > Privacy & Security > Location Services"))
+			body.WriteString(warn.Render("  System Settings > Privacy & Security > Location Services"))
 			body.WriteString("\n")
-			body.WriteString(warnStyle.Render("  Then restart patch."))
+			body.WriteString(warn.Render("  Then restart patch."))
 			body.WriteString("\n\n")
 		}
 		m.renderConnectionBlock(&body, tableWidth)
 		body.WriteString("\n")
 		m.renderNetworkTable(&body, tableWidth)
 	}
-
 	bodyStr := body.String()
-	contentLines := lipgloss.Height(bodyStr)
-	// Pad below so the last row can scroll up.
+
+	// Pad below so the last row can scroll up and reveal the bottom border.
 	for i := 0; i < bodyHeight/2; i++ {
 		bodyStr += "\n"
 	}
 
-	// Configure viewport for scrollable body.
-	m.viewport.SetWidth(tableWidth)
-	m.viewport.SetHeight(bodyHeight)
-	m.viewport.SetContent(bodyStr)
+	// Configure scrollable body.
+	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep the cursor visible.
-	if len(m.networks) > 0 {
-		// Account for connection block lines + table header + border.
-		connBlockLines := 0
+	if m.iface.PowerOn && len(m.networks) > 0 {
+		connBlockLines := 3 // "Not connected" + blank lines
 		if m.connection.Connected {
-			connBlockLines = 8 // connection box + blank line
-		} else {
-			connBlockLines = 3 // "Not connected" + blank lines
+			connBlockLines = 8 // bordered connection box + blank line
 		}
 		rowLine := connBlockLines + m.cursor + 2 // +2 for table top border + header row
-		vpHeight := m.viewport.Height()
-		margin := vpHeight / 5
-		if margin < 1 {
-			margin = 1
-		}
-		yOffset := m.viewport.YOffset()
-		if rowLine < yOffset+margin {
-			m.viewport.SetYOffset(rowLine - margin)
-		} else if rowLine >= yOffset+vpHeight-margin {
-			m.viewport.SetYOffset(rowLine - vpHeight + margin + 1)
-		}
-		if m.viewport.YOffset() < 0 {
-			m.viewport.SetYOffset(0)
-		}
+		m.scroll = m.scroll.ScrollToLine(rowLine)
 	}
 
-	vpView := m.viewport.View()
-	vpView = m.overlayScrollbar(vpView, bodyHeight, contentLines)
+	vpView := m.scroll.View()
 
 	// Render connect modal overlay if active.
 	if m.connectState != phaseIdle {
@@ -425,6 +400,28 @@ func (m *Model) View(width, height int) string {
 	return headerStr + "\n" + vpView + "\n" + footerStr
 }
 
+func (m *Model) footerBindings() []components.KeyBinding {
+	switch {
+	case m.connectState == phaseConfirm || m.connectState == phasePassword:
+		return []components.KeyBinding{
+			{Keys: "enter", Description: "confirm"},
+			{Keys: "esc", Description: "cancel"},
+		}
+	case !m.iface.PowerOn:
+		return []components.KeyBinding{
+			{Keys: "p", Description: "power on"},
+			{Keys: "esc", Description: "back"},
+		}
+	default:
+		return []components.KeyBinding{
+			{Keys: "↑↓/jk", Description: "navigate"},
+			{Keys: "enter", Description: "connect/disconnect"},
+			{Keys: "p", Description: "toggle power"},
+			{Keys: "esc", Description: "back"},
+		}
+	}
+}
+
 func (m *Model) renderConnectOverlay(base string, width, height int) string {
 	var content string
 	ssid := m.connectTarget.SSID
@@ -432,29 +429,29 @@ func (m *Model) renderConnectOverlay(base string, width, height int) string {
 		ssid = "(Hidden)"
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	title := m.theme.Label
+	value := m.theme.Value
+	dim := m.theme.Dim
 
 	switch m.connectState {
 	case phaseConfirm:
-		content = titleStyle.Render("Connect to "+ssid+"?") + "\n\n" +
-			dimStyle.Render("enter confirm  esc cancel")
+		content = title.Render("Connect to "+ssid+"?") + "\n\n" +
+			dim.Render("enter confirm  esc cancel")
 	case phasePassword:
-		content = titleStyle.Render("Connect to "+ssid) + "\n\n" +
-			valueStyle.Render("Password: ") + m.passwordInput.View() + "\n\n" +
-			dimStyle.Render("enter connect  esc cancel")
+		content = title.Render("Connect to "+ssid) + "\n\n" +
+			value.Render("Password: ") + m.passwordInput.View() + "\n\n" +
+			dim.Render("enter connect  esc cancel")
 	case phaseConnecting:
-		content = titleStyle.Render("Connecting to "+ssid+"...")
+		content = title.Render("Connecting to " + ssid + "...")
 	case phaseDisconnecting:
-		content = titleStyle.Render("Disconnecting...")
+		content = title.Render("Disconnecting...")
 	default:
 		return base
 	}
 
-	boxStyle := lipgloss.NewStyle().
+	boxStyle := m.theme.Border.
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ActiveColor).
+		BorderForeground(m.theme.Active).
 		Padding(1, 3)
 	box := boxStyle.Render(content)
 
@@ -506,85 +503,83 @@ func (m *Model) renderConnectOverlay(base string, width, height int) string {
 }
 
 func (m *Model) renderInterfaceHeader(b *strings.Builder, width int) {
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
+	theme := m.theme
 
 	name := m.iface.Name
 	if name == "" {
 		name = "Unknown"
 	}
 
-	powerIndicator := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Render("● Off")
+	powerColor := theme.Error
+	powerText := "● Off"
 	if m.iface.PowerOn {
-		powerIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Render("● On")
+		powerColor = theme.Active
+		powerText = "● On"
 	}
+	powerIndicator := theme.Value.Foreground(powerColor).Render(powerText)
 
 	b.WriteString(fmt.Sprintf("  %s %s    %s %s    %s %s",
-		labelStyle.Render("Interface:"),
-		valueStyle.Render(name),
-		labelStyle.Render("Power:"),
+		theme.Label.Render("Interface:"),
+		theme.Value.Render(name),
+		theme.Label.Render("Power:"),
 		powerIndicator,
-		labelStyle.Render("MAC:"),
-		valueStyle.Render(m.iface.HardwareAddr),
+		theme.Label.Render("MAC:"),
+		theme.Value.Render(m.iface.HardwareAddr),
 	))
 
 	if m.scanning {
 		b.WriteString("    ")
-		b.WriteString(dimStyle.Render("Scanning..."))
+		b.WriteString(theme.Dim.Render("Scanning..."))
 	}
 	b.WriteString("\n")
+	_ = width
 }
 
 func (m *Model) renderConnectionBlock(b *strings.Builder, width int) {
+	theme := m.theme
+
 	if !m.connection.Connected {
-		dimStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-		b.WriteString(dimStyle.Render("  Not connected"))
+		b.WriteString(theme.Dim.Render("  Not connected"))
 		b.WriteString("\n")
 		return
 	}
 
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-
 	// Build connection info lines.
 	var lines []string
 	lines = append(lines, fmt.Sprintf("  %s %s              %s %s",
-		labelStyle.Render("SSID:"),
-		valueStyle.Render(m.connection.SSID),
-		labelStyle.Render("Signal:"),
-		valueStyle.Render(signalString(m.connection.RSSI)+" dBm"),
+		theme.Label.Render("SSID:"),
+		theme.Value.Render(m.connection.SSID),
+		theme.Label.Render("Signal:"),
+		theme.Value.Render(signalString(m.connection.RSSI)+" dBm"),
 	))
 	lines = append(lines, fmt.Sprintf("  %s %d (%s)       %s %d dBm",
-		labelStyle.Render("Channel:"),
+		theme.Label.Render("Channel:"),
 		m.connection.Channel,
 		m.connection.Band,
-		labelStyle.Render("Noise:"),
+		theme.Label.Render("Noise:"),
 		m.connection.Noise,
 	))
 	lines = append(lines, fmt.Sprintf("  %s %s      %s %.0f Mbps",
-		labelStyle.Render("Security:"),
-		valueStyle.Render(m.connection.Security.String()),
-		labelStyle.Render("TX Rate:"),
+		theme.Label.Render("Security:"),
+		theme.Value.Render(m.connection.Security.String()),
+		theme.Label.Render("TX Rate:"),
 		m.connection.TXRate,
 	))
 	lines = append(lines, fmt.Sprintf("  %s %s     %s %s",
-		labelStyle.Render("BSSID:"),
-		valueStyle.Render(m.connection.BSSID),
-		labelStyle.Render("PHY:"),
-		valueStyle.Render(m.connection.PHYMode.String()),
+		theme.Label.Render("BSSID:"),
+		theme.Value.Render(m.connection.BSSID),
+		theme.Label.Render("PHY:"),
+		theme.Value.Render(m.connection.PHYMode.String()),
 	))
 
 	content := strings.Join(lines, "\n")
 
-	// Wrap in a rounded border box.
-	borderStyle := lipgloss.NewStyle().
+	borderStyle := theme.Border.
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tui.ActiveColor).
+		BorderForeground(theme.Active).
 		Padding(0, 1)
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor)
-	b.WriteString("  " + titleStyle.Render("Current Connection"))
+	b.WriteString("  " + theme.Label.Render("Current Connection"))
 	b.WriteString("\n")
 	boxed := borderStyle.Render(content)
 	for _, line := range strings.Split(boxed, "\n") {
@@ -592,9 +587,12 @@ func (m *Model) renderConnectionBlock(b *strings.Builder, width int) {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
+	_ = width
 }
 
 func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
+	theme := m.theme
+
 	type rowData struct {
 		ssid, signal, security, channel string
 	}
@@ -613,7 +611,6 @@ func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
 
 			ch := fmt.Sprintf("%d", net.Channel)
 			if net.Band != "" {
-				// Shorten band label for table.
 				bandShort := net.Band
 				switch net.Band {
 				case "2.4 GHz":
@@ -630,24 +627,10 @@ func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
 		}
 	}
 
-	// Measure max content width per column.
 	headers := [4]string{"SSID", "Signal", "Security", "Channel"}
-	maxContent := [4]int{}
-	for i, h := range headers {
-		maxContent[i] = len(h)
-	}
-	for _, r := range rowInfos {
-		cols := [4]string{r.ssid, r.signal, r.security, r.channel}
-		for i, c := range cols {
-			if w := len(c); w > maxContent[i] {
-				maxContent[i] = w
-			}
-		}
-	}
 
 	const tableMargin = 2
 	tableWidth := width - tableMargin*2
-
 	const borderOverhead = 5
 	const cellPadding = 2
 
@@ -665,27 +648,21 @@ func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
 	if ssidW < 10+cellPadding {
 		ssidW = 10 + cellPadding
 	}
-
 	ssidContentW := ssidW - cellPadding
 
 	var rows [][]string
 	for _, r := range rowInfos {
 		ssid := r.ssid
-		if len(ssid) > ssidContentW {
-			ssid = truncateText(ssid, ssidContentW)
+		if len([]rune(ssid)) > ssidContentW {
+			ssid = components.TruncateText(ssid, ssidContentW)
 		}
 		rows = append(rows, []string{ssid, r.signal, r.security, r.channel})
 	}
 
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ActiveColor).Padding(0, 1)
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("#04B575")).Foreground(lipgloss.Color("#000000")).Padding(0, 1)
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
-
 	cursor := m.cursor
-
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(tui.ActiveColor)).
+		BorderStyle(theme.Border).
 		Width(tableWidth).
 		Headers(headers[0], headers[1], headers[2], headers[3]).
 		Rows(rows...).
@@ -703,28 +680,26 @@ func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
 			}
 
 			if row == table.HeaderRow {
-				return headerStyle.Width(w)
+				return theme.TableHeader.Width(w)
 			}
 
 			if m.focused && row == cursor {
-				return selectedStyle.Width(w)
+				return theme.Selected.Width(w)
 			}
 
-			base := normalStyle.Width(w)
+			base := theme.TableCell.Width(w)
 			if len(m.networks) == 0 {
-				return base.Foreground(tui.InactiveColor)
+				return base.Foreground(theme.Inactive)
 			}
 
-			// Highlight connected network SSID in green.
+			// Highlight connected network SSID.
 			if col == 0 && row < len(m.networks) {
 				if m.networks[row].SSID == m.connection.SSID && m.connection.Connected {
-					return base.Foreground(lipgloss.Color("#04B575"))
+					return base.Foreground(theme.Active)
 				}
-			}
-
-			// Dim hidden networks.
-			if col == 0 && row < len(m.networks) && m.networks[row].SSID == "" {
-				return base.Foreground(tui.InactiveColor)
+				if m.networks[row].SSID == "" {
+					return base.Foreground(theme.Inactive)
+				}
 			}
 
 			return base
@@ -735,67 +710,4 @@ func (m *Model) renderNetworkTable(b *strings.Builder, width int) {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-}
-
-// truncateText truncates s to maxWidth characters, appending "…" if truncated.
-func truncateText(s string, maxWidth int) string {
-	if maxWidth <= 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
-		return s
-	}
-	return string(runes[:maxWidth-1]) + "…"
-}
-
-// overlayScrollbar renders a scrollbar track on the right edge of the viewport.
-func (m *Model) overlayScrollbar(vpView string, vpHeight int, contentLines int) string {
-	totalLines := contentLines
-	if totalLines <= vpHeight {
-		return vpView
-	}
-
-	trackStyle := lipgloss.NewStyle().Foreground(tui.InactiveColor)
-	thumbStyle := lipgloss.NewStyle().Foreground(tui.ActiveColor)
-
-	thumbSize := vpHeight * vpHeight / totalLines
-	if thumbSize < 1 {
-		thumbSize = 1
-	}
-	scrollable := totalLines - vpHeight
-	if scrollable < 0 {
-		scrollable = 0
-	}
-	yOffset := m.viewport.YOffset()
-	if yOffset > scrollable {
-		yOffset = scrollable
-	}
-	thumbPos := 0
-	if scrollable > 0 {
-		if yOffset >= scrollable {
-			thumbPos = vpHeight - thumbSize
-		} else {
-			thumbPos = yOffset * (vpHeight - thumbSize) / scrollable
-		}
-	}
-
-	lines := strings.Split(vpView, "\n")
-	if len(lines) > vpHeight {
-		lines = lines[:vpHeight]
-	}
-
-	var b strings.Builder
-	for i := 0; i < len(lines); i++ {
-		b.WriteString(lines[i])
-		if i >= thumbPos && i < thumbPos+thumbSize {
-			b.WriteString(thumbStyle.Render("┃"))
-		} else {
-			b.WriteString(trackStyle.Render("│"))
-		}
-		if i < len(lines)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
 }
