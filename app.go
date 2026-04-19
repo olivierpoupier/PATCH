@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/olivierpoupier/patch/fsview"
+	"github.com/olivierpoupier/patch/serialterm"
 	"github.com/olivierpoupier/patch/tui"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,22 +12,26 @@ import (
 )
 
 type model struct {
-	tabs          []tui.Tab
-	activeTab     int
-	focusContent  bool
-	width         int
-	height        int
-	theme         *tui.Theme
-	fsview        *fsview.Model
-	fsOpen        bool
-	fsReturnFocus bool
+	tabs            []tui.Tab
+	activeTab       int
+	focusContent    bool
+	width           int
+	height          int
+	theme           *tui.Theme
+	fsview          *fsview.Model
+	fsOpen          bool
+	fsReturnFocus   bool
+	serialterm      *serialterm.Model
+	termOpen        bool
+	termReturnFocus bool
 }
 
 func newModel(theme *tui.Theme, tabs []tui.Tab) model {
 	return model{
-		tabs:   tabs,
-		theme:  theme,
-		fsview: fsview.New(theme),
+		tabs:       tabs,
+		theme:      theme,
+		fsview:     fsview.New(theme),
+		serialterm: serialterm.New(theme),
 	}
 }
 
@@ -92,6 +97,31 @@ func (m *model) closeFSView() tea.Cmd {
 	return nil
 }
 
+func (m *model) openSerialTerm(msg tui.OpenSerialTermMsg) tea.Cmd {
+	m.termReturnFocus = m.focusContent
+	if m.focusContent {
+		tab, _ := m.tabs[m.activeTab].SetFocused(false)
+		m.tabs[m.activeTab] = tab
+		m.focusContent = false
+	}
+	m.serialterm.SetSize(m.width, m.height)
+	cmd := m.serialterm.Open(msg.Device)
+	m.termOpen = true
+	return cmd
+}
+
+func (m *model) closeSerialTerm() tea.Cmd {
+	m.serialterm.Close()
+	m.termOpen = false
+	if m.termReturnFocus {
+		tab, cmd := m.tabs[m.activeTab].SetFocused(true)
+		m.tabs[m.activeTab] = tab
+		m.focusContent = true
+		return cmd
+	}
+	return nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -99,6 +129,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		if m.fsview != nil {
 			m.fsview.SetSize(msg.Width, msg.Height)
+		}
+		if m.serialterm != nil {
+			m.serialterm.SetSize(msg.Width, msg.Height)
 		}
 
 	case tui.OpenFSViewMsg:
@@ -109,7 +142,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.closeFSView()
 		return m, cmd
 
+	case tui.OpenSerialTermMsg:
+		cmd := m.openSerialTerm(msg)
+		return m, cmd
+
+	case tui.CloseSerialTermMsg:
+		cmd := m.closeSerialTerm()
+		return m, cmd
+
 	case tea.KeyPressMsg:
+		// Terminal modal intercepts all keys (including ctrl+c, which
+		// forwards to the device). Press esc to leave the modal, then
+		// ctrl+c to quit PATCH.
+		if m.termOpen {
+			stm, cmd := m.serialterm.Update(msg)
+			m.serialterm = stm
+			return m, cmd
+		}
+
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -174,6 +224,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, fsCmd)
 		}
 	}
+	if m.termOpen {
+		stm, stCmd := m.serialterm.Update(msg)
+		m.serialterm = stm
+		if stCmd != nil {
+			cmds = append(cmds, stCmd)
+		}
+	}
 	// Broadcast to all tabs. Each tab ignores messages it doesn't own.
 	for i, t := range m.tabs {
 		updated, cmd := t.Update(msg)
@@ -188,6 +245,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("")
+	}
+
+	if m.termOpen {
+		v := tea.NewView(m.serialterm.View(m.width, m.height))
+		v.AltScreen = true
+		return v
 	}
 
 	if m.fsOpen {

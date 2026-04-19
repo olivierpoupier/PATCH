@@ -36,6 +36,33 @@ type Theme struct {
 
 	// Border style.
 	Border lipgloss.Style
+
+	// Terminal-mode sub-theme used by the serial terminal modal.
+	Terminal *TerminalTheme
+}
+
+// TerminalTheme is a distinct palette used only inside the serial terminal
+// modal to convey the feeling of entering a separate mode.
+type TerminalTheme struct {
+	// Semantic colors.
+	Accent     color.Color // headings, borders
+	AccentDim  color.Color // muted version of Accent
+	Text       color.Color // body text
+	TextDim    color.Color // secondary text
+	Bg         color.Color // background
+	Disconnect color.Color // "DEVICE DISCONNECTED" banner
+	Prompt     color.Color // prompt marker / highlight
+
+	// Pre-built styles.
+	Banner     lipgloss.Style // ASCII banner text
+	HeaderKey  lipgloss.Style // "Firmware"
+	HeaderVal  lipgloss.Style // "0.95.1"
+	Body       lipgloss.Style // scrollback default
+	Dim        lipgloss.Style // muted scrollback lines
+	Separator  lipgloss.Style // horizontal rule glyph style
+	Border           lipgloss.Style // heavy-border foreground
+	DisconnectBanner lipgloss.Style // red banner for disconnect
+	Help             lipgloss.Style // footer hints
 }
 
 // NewTheme creates the default PATCH theme with all colors and styles pre-built.
@@ -81,5 +108,43 @@ func NewTheme() *Theme {
 			Padding(0, 1),
 
 		Border: lipgloss.NewStyle().Foreground(active),
+
+		Terminal: newTerminalTheme(),
+	}
+}
+
+// newTerminalTheme builds the amber-on-dark palette used by the serial
+// terminal modal.
+func newTerminalTheme() *TerminalTheme {
+	accent := lipgloss.Color("#FFB000")     // amber
+	accentDim := lipgloss.Color("#8A5C00")  // dim amber
+	text := lipgloss.Color("#FFD47F")       // warm text
+	textDim := lipgloss.Color("#7A6140")    // faded text
+	bg := lipgloss.Color("#0A0A0A")         // near-black
+	disconnect := lipgloss.Color("#FF3030") // bright red
+	prompt := lipgloss.Color("#FFD700")     // slightly brighter for prompt
+
+	return &TerminalTheme{
+		Accent:     accent,
+		AccentDim:  accentDim,
+		Text:       text,
+		TextDim:    textDim,
+		Bg:         bg,
+		Disconnect: disconnect,
+		Prompt:     prompt,
+
+		Banner:    lipgloss.NewStyle().Bold(true).Foreground(accent),
+		HeaderKey: lipgloss.NewStyle().Foreground(accentDim),
+		HeaderVal: lipgloss.NewStyle().Bold(true).Foreground(text),
+		Body:      lipgloss.NewStyle().Foreground(text),
+		Dim:       lipgloss.NewStyle().Foreground(textDim),
+		Separator: lipgloss.NewStyle().Foreground(accentDim),
+		Border:    lipgloss.NewStyle().Foreground(accent),
+		DisconnectBanner: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#000000")).
+			Background(disconnect).
+			Padding(0, 1),
+		Help: lipgloss.NewStyle().Foreground(textDim),
 	}
 }

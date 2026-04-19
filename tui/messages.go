@@ -39,3 +39,28 @@ type OpenFSViewMsg struct {
 // CloseFSViewMsg is emitted by the file system view when it wants the app
 // to tear down the overlay.
 type CloseFSViewMsg struct{}
+
+// SerialDeviceInfo describes a USB serial device about to be opened in the
+// serial terminal modal. Neutral to the source tab.
+type SerialDeviceInfo struct {
+	VID          string // e.g. "0483" (no 0x prefix)
+	PID          string // e.g. "5740"
+	Name         string // user-friendly device name
+	VendorName   string
+	Product      string // from serial enumerator
+	SerialNumber string
+	PortPath     string // "/dev/cu.usbmodem14203" or "/dev/ttyACM0"
+	Baud         int
+	ProfileKey   string // lookup key for the serialterm device profile
+}
+
+// OpenSerialTermMsg is emitted by any tab to request the app open the
+// serial terminal view for a specific USB device.
+type OpenSerialTermMsg struct {
+	Device SerialDeviceInfo
+	Source string
+}
+
+// CloseSerialTermMsg is emitted by the serial terminal view to request
+// teardown of the overlay.
+type CloseSerialTermMsg struct{}
