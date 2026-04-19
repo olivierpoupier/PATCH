@@ -1,10 +1,11 @@
 package main
 
 import (
+	"log/slog"
 	"strings"
 
+	"github.com/olivierpoupier/patch/devices"
 	"github.com/olivierpoupier/patch/fsview"
-	"github.com/olivierpoupier/patch/serialterm"
 	"github.com/olivierpoupier/patch/tui"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,26 +13,25 @@ import (
 )
 
 type model struct {
-	tabs            []tui.Tab
-	activeTab       int
-	focusContent    bool
-	width           int
-	height          int
-	theme           *tui.Theme
-	fsview          *fsview.Model
-	fsOpen          bool
-	fsReturnFocus   bool
-	serialterm      *serialterm.Model
-	termOpen        bool
-	termReturnFocus bool
+	tabs              []tui.Tab
+	activeTab         int
+	focusContent      bool
+	width             int
+	height            int
+	theme             *tui.Theme
+	fsview            *fsview.Model
+	fsOpen            bool
+	fsReturnFocus     bool
+	deviceView        tui.DeviceView
+	deviceOpen        bool
+	deviceReturnFocus bool
 }
 
 func newModel(theme *tui.Theme, tabs []tui.Tab) model {
 	return model{
-		tabs:       tabs,
-		theme:      theme,
-		fsview:     fsview.New(theme),
-		serialterm: serialterm.New(theme),
+		tabs:   tabs,
+		theme:  theme,
+		fsview: fsview.New(theme),
 	}
 }
 
@@ -42,7 +42,6 @@ func (m model) Init() tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
-	// Activate the initial tab.
 	if len(m.tabs) > 0 {
 		tab, cmd := m.tabs[m.activeTab].SetActive(true)
 		m.tabs[m.activeTab] = tab
@@ -97,23 +96,41 @@ func (m *model) closeFSView() tea.Cmd {
 	return nil
 }
 
-func (m *model) openSerialTerm(msg tui.OpenSerialTermMsg) tea.Cmd {
-	m.termReturnFocus = m.focusContent
+// openDeviceView resolves the matching device view for the incoming device
+// info, constructs it, and activates the modal.
+func (m *model) openDeviceView(msg tui.OpenDeviceMsg) tea.Cmd {
+	desc, ok := devices.Resolve(msg.Device)
+	if !ok {
+		slog.Warn("no device view registered", "vid", msg.Device.VID, "pid", msg.Device.PID)
+		return nil
+	}
+	if msg.Device.Baud == 0 {
+		msg.Device.Baud = desc.Baud
+	}
+	if msg.Device.Name == "" {
+		msg.Device.Name = desc.Name
+	}
+	m.deviceReturnFocus = m.focusContent
 	if m.focusContent {
 		tab, _ := m.tabs[m.activeTab].SetFocused(false)
 		m.tabs[m.activeTab] = tab
 		m.focusContent = false
 	}
-	m.serialterm.SetSize(m.width, m.height)
-	cmd := m.serialterm.Open(msg.Device)
-	m.termOpen = true
+	view := desc.New(m.theme)
+	view.SetSize(m.width, m.height)
+	cmd := view.Open(msg.Device)
+	m.deviceView = view
+	m.deviceOpen = true
 	return cmd
 }
 
-func (m *model) closeSerialTerm() tea.Cmd {
-	m.serialterm.Close()
-	m.termOpen = false
-	if m.termReturnFocus {
+func (m *model) closeDeviceView() tea.Cmd {
+	if m.deviceView != nil {
+		m.deviceView.Close()
+	}
+	m.deviceView = nil
+	m.deviceOpen = false
+	if m.deviceReturnFocus {
 		tab, cmd := m.tabs[m.activeTab].SetFocused(true)
 		m.tabs[m.activeTab] = tab
 		m.focusContent = true
@@ -130,8 +147,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fsview != nil {
 			m.fsview.SetSize(msg.Width, msg.Height)
 		}
-		if m.serialterm != nil {
-			m.serialterm.SetSize(msg.Width, msg.Height)
+		if m.deviceView != nil {
+			m.deviceView.SetSize(msg.Width, msg.Height)
 		}
 
 	case tui.OpenFSViewMsg:
@@ -142,21 +159,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.closeFSView()
 		return m, cmd
 
-	case tui.OpenSerialTermMsg:
-		cmd := m.openSerialTerm(msg)
+	case tui.OpenDeviceMsg:
+		cmd := m.openDeviceView(msg)
 		return m, cmd
 
-	case tui.CloseSerialTermMsg:
-		cmd := m.closeSerialTerm()
+	case tui.CloseDeviceMsg:
+		cmd := m.closeDeviceView()
 		return m, cmd
 
 	case tea.KeyPressMsg:
-		// Terminal modal intercepts all keys (including ctrl+c, which
-		// forwards to the device). Press esc to leave the modal, then
-		// ctrl+c to quit PATCH.
-		if m.termOpen {
-			stm, cmd := m.serialterm.Update(msg)
-			m.serialterm = stm
+		// Device view intercepts all keys (including ctrl+c, which forwards
+		// to the device). Press esc to leave the modal, then ctrl+c to quit.
+		if m.deviceOpen && m.deviceView != nil {
+			view, cmd := m.deviceView.Update(msg)
+			m.deviceView = view
 			return m, cmd
 		}
 
@@ -186,7 +202,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		// Tab bar navigation.
 		switch msg.String() {
 		case "tab", "right", "l":
 			newIdx := (m.activeTab + 1) % len(m.tabs)
@@ -202,7 +217,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tabs[m.activeTab] = tab
 			return m, cmd
 		default:
-			// Number keys: "1" -> index 0, "2" -> index 1, etc.
 			s := msg.String()
 			if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
 				idx := int(s[0] - '1')
@@ -215,7 +229,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Non-key messages.
 	var cmds []tea.Cmd
 	if m.fsOpen {
 		fsm, fsCmd := m.fsview.Update(msg)
@@ -224,14 +237,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, fsCmd)
 		}
 	}
-	if m.termOpen {
-		stm, stCmd := m.serialterm.Update(msg)
-		m.serialterm = stm
-		if stCmd != nil {
-			cmds = append(cmds, stCmd)
+	if m.deviceOpen && m.deviceView != nil {
+		view, cmd := m.deviceView.Update(msg)
+		m.deviceView = view
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	// Broadcast to all tabs. Each tab ignores messages it doesn't own.
 	for i, t := range m.tabs {
 		updated, cmd := t.Update(msg)
 		m.tabs[i] = updated
@@ -247,8 +259,8 @@ func (m model) View() tea.View {
 		return tea.NewView("")
 	}
 
-	if m.termOpen {
-		v := tea.NewView(m.serialterm.View(m.width, m.height))
+	if m.deviceOpen && m.deviceView != nil {
+		v := tea.NewView(m.deviceView.View(m.width, m.height))
 		v.AltScreen = true
 		return v
 	}
@@ -283,8 +295,6 @@ func (m model) View() tea.View {
 
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Bottom, tabRow, gap)
 
-	// Tab bar is 3 lines (top border + text + gap line).
-	// Content border: top padding(1) + bottom padding(1) + bottom border(1) = 3.
 	const tabBarHeight = 3
 	const contentBorderHeight = 3
 	contentHeight := m.height - tabBarHeight - contentBorderHeight
@@ -292,7 +302,6 @@ func (m model) View() tea.View {
 		contentHeight = 1
 	}
 
-	// Inner width = contentWidth minus left and right borders.
 	innerWidth := contentWidth - 2
 	content := m.tabs[m.activeTab].View(innerWidth, contentHeight)
 

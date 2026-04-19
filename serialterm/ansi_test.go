@@ -6,7 +6,7 @@ import (
 )
 
 func TestScrollbackPlainText(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("hello\nworld\n"))
 	got := s.Lines()
 	want := []string{"hello", "world"}
@@ -16,7 +16,7 @@ func TestScrollbackPlainText(t *testing.T) {
 }
 
 func TestScrollbackInProgressLine(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("one\ntwo"))
 	got := s.Lines()
 	want := []string{"one", "two"}
@@ -26,7 +26,7 @@ func TestScrollbackInProgressLine(t *testing.T) {
 }
 
 func TestScrollbackSGRPassthrough(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("\x1b[31mRED\x1b[0m\n"))
 	got := s.Lines()
 	want := []string{"\x1b[31mRED\x1b[0m"}
@@ -37,7 +37,7 @@ func TestScrollbackSGRPassthrough(t *testing.T) {
 
 func TestScrollbackStripsCUP(t *testing.T) {
 	// Cursor-position and erase escapes must be dropped.
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("a\x1b[2;5Hb\x1b[Kc\n"))
 	got := s.Lines()
 	want := []string{"abc"}
@@ -49,9 +49,9 @@ func TestScrollbackStripsCUP(t *testing.T) {
 func TestScrollbackCRResetsVisible(t *testing.T) {
 	// Our line-mode scanner treats CR as "redraw current line": visible
 	// bytes are cleared and subsequent writes start at column 0. This gives
-	// clean output for common cases like progress bars and Flipper prompt
-	// redraws without needing a full VT emulator.
-	s := newScrollback()
+	// clean output for common cases like progress bars and prompt redraws
+	// without needing a full VT emulator.
+	s := NewScrollback(0)
 	s.Write([]byte("first\rse\n"))
 	got := s.Lines()
 	want := []string{"se"}
@@ -61,10 +61,7 @@ func TestScrollbackCRResetsVisible(t *testing.T) {
 }
 
 func TestScrollbackSGRResetStopsCarry(t *testing.T) {
-	// The explicit reset stays in the committed line (the device sent it),
-	// but it also clears the carried-forward style so subsequent lines are
-	// not tinted with the previous color.
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("\x1b[31mRED\x1b[0m\nplain\n"))
 	got := s.Lines()
 	want := []string{"\x1b[31mRED\x1b[0m", "plain"}
@@ -74,9 +71,7 @@ func TestScrollbackSGRResetStopsCarry(t *testing.T) {
 }
 
 func TestScrollbackSGRCarriesAcrossLines(t *testing.T) {
-	// Without an explicit reset the active SGR should carry to the next line
-	// so the user sees continuous color, matching real terminal behaviour.
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("\x1b[31mRED\nstill-red\n"))
 	got := s.Lines()
 	want := []string{"\x1b[31mRED", "\x1b[31mstill-red"}
@@ -86,7 +81,7 @@ func TestScrollbackSGRCarriesAcrossLines(t *testing.T) {
 }
 
 func TestScrollbackBackspace(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("abc\b\bX\n"))
 	got := s.Lines()
 	want := []string{"aX"}
@@ -96,7 +91,7 @@ func TestScrollbackBackspace(t *testing.T) {
 }
 
 func TestScrollbackTab(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("a\tb\n"))
 	got := s.Lines()
 	want := []string{"a    b"}
@@ -106,7 +101,7 @@ func TestScrollbackTab(t *testing.T) {
 }
 
 func TestScrollbackClear(t *testing.T) {
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write([]byte("a\nb\n"))
 	s.Clear()
 	if got := s.Lines(); len(got) != 0 {
@@ -115,7 +110,7 @@ func TestScrollbackClear(t *testing.T) {
 }
 
 func TestScrollbackCapacityRing(t *testing.T) {
-	s := &scrollback{capacity: 3}
+	s := NewScrollback(3)
 	s.Write([]byte("a\nb\nc\nd\ne\n"))
 	got := s.Lines()
 	want := []string{"c", "d", "e"}
@@ -124,27 +119,27 @@ func TestScrollbackCapacityRing(t *testing.T) {
 	}
 }
 
-func TestScrollbackFlipperSample(t *testing.T) {
-	// Representative of a Flipper "device_info" reply intermixed with ANSI
-	// prompt formatting. All cursor-movement escapes should be stripped,
-	// colors should be kept, and key/value lines should appear.
+func TestScrollbackDefaultCapacity(t *testing.T) {
+	// NewScrollback(0) picks the default; a negative value is equivalent.
+	s := NewScrollback(-1)
+	if s.capacity != defaultScrollbackCapacity {
+		t.Fatalf("default capacity: got %d, want %d", s.capacity, defaultScrollbackCapacity)
+	}
+}
+
+func TestScrollbackANSISample(t *testing.T) {
+	// Representative of a device reply intermixed with ANSI prompt
+	// formatting. All cursor-movement escapes should be stripped, colours
+	// should be kept, and plain lines should appear.
 	input := []byte(
 		"\x1b[31;1m>:\x1b[0m device_info\r\n" +
 			"hardware_ver        : 13\r\n" +
 			"firmware_version    : 0.95.1\r\n" +
 			"\x1b[31;1m>:\x1b[0m ")
-	s := newScrollback()
+	s := NewScrollback(0)
 	s.Write(input)
 	lines := s.Lines()
 	if len(lines) < 3 {
-		t.Fatalf("flipper sample: expected at least 3 lines, got %d: %q", len(lines), lines)
-	}
-	// Parser should be able to find key/value lines from the buffer.
-	parsed := parseFlipperKV(input)
-	if parsed["hardware_ver"] != "13" {
-		t.Errorf("parseFlipperKV hardware_ver: got %q", parsed["hardware_ver"])
-	}
-	if parsed["firmware_version"] != "0.95.1" {
-		t.Errorf("parseFlipperKV firmware_version: got %q", parsed["firmware_version"])
+		t.Fatalf("expected at least 3 lines, got %d: %q", len(lines), lines)
 	}
 }

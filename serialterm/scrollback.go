@@ -2,10 +2,11 @@ package serialterm
 
 import "bytes"
 
-// maxScrollback caps the terminal history to prevent unbounded memory growth.
-const maxScrollback = 4000
+// defaultScrollbackCapacity caps the terminal history to prevent unbounded
+// memory growth. Overridable per Scrollback via NewScrollback.
+const defaultScrollbackCapacity = 4000
 
-// scrollback accumulates bytes from the serial device into terminal-friendly
+// Scrollback accumulates bytes from the serial device into terminal-friendly
 // lines. It is a line-mode sanitiser, not a full VT100:
 //
 //   - SGR sequences (\e[...m) are preserved so lipgloss-rendered colors flow
@@ -14,11 +15,11 @@ const maxScrollback = 4000
 //     screens, save/restore) is discarded so it can't corrupt bubbletea's
 //     rendered frame.
 //   - LF ends a line. CRLF counts as LF only. Lone CR resets the current
-//     line back to the carried-forward style, which handles both Flipper
-//     prompt redraws and simple progress-bar re-render patterns.
+//     line back to the carried-forward style, which handles both prompt
+//     redraws and simple progress-bar re-render patterns.
 //   - The currently-active SGR state is carried forward across line breaks,
 //     matching real-terminal behaviour.
-type scrollback struct {
+type Scrollback struct {
 	lines     []string
 	cur       []byte
 	col       int    // visible column, advanced only by printable writes
@@ -37,12 +38,17 @@ const (
 	stateCSI
 )
 
-func newScrollback() *scrollback {
-	return &scrollback{capacity: maxScrollback}
+// NewScrollback creates a Scrollback with the given line-capacity limit. When
+// capacity <= 0 the default (4000 lines) is used.
+func NewScrollback(capacity int) *Scrollback {
+	if capacity <= 0 {
+		capacity = defaultScrollbackCapacity
+	}
+	return &Scrollback{capacity: capacity}
 }
 
 // Write feeds bytes through the state machine.
-func (s *scrollback) Write(p []byte) {
+func (s *Scrollback) Write(p []byte) {
 	for _, b := range p {
 		s.feed(b)
 	}
@@ -51,7 +57,7 @@ func (s *scrollback) Write(p []byte) {
 // Lines returns committed lines plus (if non-empty) the in-progress line.
 // A cur that contains only the carried-forward SGR prefix is treated as
 // empty so it doesn't render as a trailing blank line.
-func (s *scrollback) Lines() []string {
+func (s *Scrollback) Lines() []string {
 	if s.col == 0 && bytes.Equal(s.cur, s.activeSGR) {
 		return s.lines
 	}
@@ -62,7 +68,7 @@ func (s *scrollback) Lines() []string {
 }
 
 // Clear resets all scrollback state.
-func (s *scrollback) Clear() {
+func (s *Scrollback) Clear() {
 	s.lines = nil
 	s.cur = s.cur[:0]
 	s.col = 0
@@ -72,7 +78,7 @@ func (s *scrollback) Clear() {
 	s.pending = s.pending[:0]
 }
 
-func (s *scrollback) feed(b byte) {
+func (s *Scrollback) feed(b byte) {
 	// Resolve a pending CR when the next byte arrives.
 	if s.gotCR && b != '\n' && s.state == stateNormal {
 		s.resetLine()
@@ -88,7 +94,7 @@ func (s *scrollback) feed(b byte) {
 	}
 }
 
-func (s *scrollback) feedNormal(b byte) {
+func (s *Scrollback) feedNormal(b byte) {
 	switch b {
 	case 0x1b:
 		s.state = stateEsc
@@ -121,7 +127,7 @@ func (s *scrollback) feedNormal(b byte) {
 	}
 }
 
-func (s *scrollback) feedEsc(b byte) {
+func (s *Scrollback) feedEsc(b byte) {
 	s.pending = append(s.pending, b)
 	switch b {
 	case '[':
@@ -135,7 +141,7 @@ func (s *scrollback) feedEsc(b byte) {
 	}
 }
 
-func (s *scrollback) feedCSI(b byte) {
+func (s *Scrollback) feedCSI(b byte) {
 	s.pending = append(s.pending, b)
 	if b >= 0x40 && b <= 0x7E {
 		if b == 'm' {
@@ -163,18 +169,18 @@ func isSGRReset(seq []byte) bool {
 	return bytes.Equal(params, []byte("0"))
 }
 
-func (s *scrollback) writeVisible(b byte) {
+func (s *Scrollback) writeVisible(b byte) {
 	s.cur = append(s.cur, b)
 	s.col++
 }
 
 // resetLine clears the in-progress line back to the active carried style.
-func (s *scrollback) resetLine() {
+func (s *Scrollback) resetLine() {
 	s.cur = append(s.cur[:0], s.activeSGR...)
 	s.col = 0
 }
 
-func (s *scrollback) commitLine() {
+func (s *Scrollback) commitLine() {
 	line := string(s.cur)
 	s.lines = append(s.lines, line)
 	if len(s.lines) > s.capacity {

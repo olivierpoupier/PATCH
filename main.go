@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/olivierpoupier/patch/bluetooth"
+	_ "github.com/olivierpoupier/patch/devices/flipper"
+	_ "github.com/olivierpoupier/patch/devices/generic"
 	"github.com/olivierpoupier/patch/logging"
 	"github.com/olivierpoupier/patch/platform"
 	"github.com/olivierpoupier/patch/tui"

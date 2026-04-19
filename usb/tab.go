@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/olivierpoupier/patch/serialterm"
+	"github.com/olivierpoupier/patch/devices"
 	"github.com/olivierpoupier/patch/tui"
 	"github.com/olivierpoupier/patch/tui/components"
 
@@ -116,7 +116,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 			if info := m.serialDeviceForCursor(); info != nil {
 				dev := *info
 				return m, func() tea.Msg {
-					return tui.OpenSerialTermMsg{Device: dev, Source: "usb"}
+					return tui.OpenDeviceMsg{Device: dev, Source: "usb"}
 				}
 			}
 			m.toggleCollapseAtCursor()
@@ -441,26 +441,31 @@ func resolveSerialPort(dev *USBDevice) *tui.SerialDeviceInfo {
 		return nil
 	}
 
-	profile := serialterm.LookupProfile(wantVID, wantPID)
-	name := dev.Name
-	if name == "" {
-		name = best.Product
-	}
-	if name == "" {
-		name = profile.Name
-	}
-
-	return &tui.SerialDeviceInfo{
+	info := tui.SerialDeviceInfo{
 		VID:          wantVID,
 		PID:          wantPID,
-		Name:         name,
+		Name:         dev.Name,
 		VendorName:   dev.VendorName,
 		Product:      best.Product,
 		SerialNumber: best.SerialNumber,
 		PortPath:     best.Name,
-		Baud:         profile.Baud,
-		ProfileKey:   profile.Key,
 	}
+	if desc, ok := devices.Resolve(info); ok {
+		info.Baud = desc.Baud
+		info.ProfileKey = desc.Key
+		if info.Name == "" {
+			info.Name = best.Product
+		}
+		if info.Name == "" {
+			info.Name = desc.Name
+		}
+	} else {
+		info.Baud = 115200
+		if info.Name == "" {
+			info.Name = best.Product
+		}
+	}
+	return &info
 }
 
 func normalizeHex(s string) string {
@@ -487,7 +492,10 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 	} else {
 		for _, r := range m.tableRows {
 			action := ""
-			if r.Device != nil && serialterm.HasProfile(r.Device.VendorID, r.Device.ProductID) {
+			if r.Device != nil && devices.HasCustom(tui.SerialDeviceInfo{
+				VID: r.Device.VendorID,
+				PID: r.Device.ProductID,
+			}) {
 				action = "⏎ serial"
 			}
 			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, r.Storage, action})

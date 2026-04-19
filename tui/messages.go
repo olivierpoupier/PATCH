@@ -54,13 +54,14 @@ type SerialDeviceInfo struct {
 	ProfileKey   string // lookup key for the serialterm device profile
 }
 
-// OpenSerialTermMsg is emitted by any tab to request the app open the
-// serial terminal view for a specific USB device.
-type OpenSerialTermMsg struct {
+// OpenDeviceMsg is emitted by any tab to request the app open a per-device
+// view for a specific USB/serial device. The app routes the message through
+// the devices registry to pick the matching DeviceView implementation.
+type OpenDeviceMsg struct {
 	Device SerialDeviceInfo
 	Source string
 }
 
-// CloseSerialTermMsg is emitted by the serial terminal view to request
-// teardown of the overlay.
-type CloseSerialTermMsg struct{}
+// CloseDeviceMsg is emitted by a device view to request teardown of the
+// overlay and focus return to the source tab.
+type CloseDeviceMsg struct{}
