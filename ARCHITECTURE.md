@@ -6,6 +6,8 @@ PATCH (Peripheral Access Terminal for Connected Hardware) is a multi-tab TUI for
 
 This guide establishes the architecture patterns, conventions, and shared infrastructure that all tabs must follow. It is based on an audit of the codebase and research into Bubbletea/Bubbles/Lipgloss best practices.
 
+> **Looking for the device-view layer?** The per-device modal that opens when a user presses `enter` on a USB serial device (Flipper Zero, generic serial terminal, future devices) is documented under [`docs/`](docs/README.md). Start with [`docs/device-architecture.md`](docs/device-architecture.md) for the end-to-end flow and [`docs/adding-a-device.md`](docs/adding-a-device.md) to build a new one.
+
 ---
 
 ## 1. Project Structure
