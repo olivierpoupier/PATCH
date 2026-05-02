@@ -552,12 +552,16 @@ func (m *Model) renderConnectionBlock(b *strings.Builder, width int) {
 		theme.Label.Render("Signal:"),
 		theme.Value.Render(signalString(m.connection.RSSI)+" dBm"),
 	))
-	lines = append(lines, fmt.Sprintf("  %s %d (%s)       %s %d dBm",
+	noise := "—"
+	if m.connection.Noise != 0 {
+		noise = fmt.Sprintf("%d dBm", m.connection.Noise)
+	}
+	lines = append(lines, fmt.Sprintf("  %s %d (%s)       %s %s",
 		theme.Label.Render("Channel:"),
 		m.connection.Channel,
 		m.connection.Band,
 		theme.Label.Render("Noise:"),
-		m.connection.Noise,
+		theme.Value.Render(noise),
 	))
 	lines = append(lines, fmt.Sprintf("  %s %s      %s %.0f Mbps",
 		theme.Label.Render("Security:"),
@@ -565,11 +569,15 @@ func (m *Model) renderConnectionBlock(b *strings.Builder, width int) {
 		theme.Label.Render("TX Rate:"),
 		m.connection.TXRate,
 	))
+	phy := m.connection.PHYMode.String()
+	if m.connection.PHYMode == PHYModeNone {
+		phy = "—"
+	}
 	lines = append(lines, fmt.Sprintf("  %s %s     %s %s",
 		theme.Label.Render("BSSID:"),
 		theme.Value.Render(m.connection.BSSID),
 		theme.Label.Render("PHY:"),
-		theme.Value.Render(m.connection.PHYMode.String()),
+		theme.Value.Render(phy),
 	))
 
 	content := strings.Join(lines, "\n")

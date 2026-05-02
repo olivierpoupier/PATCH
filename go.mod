@@ -6,14 +6,15 @@ require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
+	github.com/Wifx/gonetworkmanager v0.5.0
 	github.com/bluetuith-org/bluetooth-classic v0.0.5
+	github.com/google/uuid v1.6.0
 	go.bug.st/serial v1.6.4
 	tinygo.org/x/bluetooth v0.14.0
 )
 
 require (
 	github.com/Southclaws/fault v0.8.2 // indirect
-	github.com/Wifx/gonetworkmanager v0.5.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260205113103-524a6607adb8 // indirect
@@ -27,7 +28,6 @@ require (
 	github.com/cskr/pubsub/v2 v2.0.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/godbus/dbus/v5 v5.2.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mafik/pulseaudio v0.0.0-20240327130323-384e01075e6e // indirect
 	github.com/mattn/go-runewidth v0.0.21 // indirect
