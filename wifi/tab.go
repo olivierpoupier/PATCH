@@ -41,6 +41,7 @@ type Model struct {
 	focused        bool
 	initialized    bool
 	locationAuthed bool
+	done           chan struct{}
 	scroll         components.ScrollableView
 	connectState   connectPhase
 	connectTarget  NetworkInfo
@@ -71,6 +72,9 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 		m.client = msg.client
 		m.initialized = true
 		m.locationAuthed = msg.client.LocationAuthorized()
+		if m.done == nil {
+			m.done = make(chan struct{})
+		}
 		cmds := []tea.Cmd{
 			fetchInterfaceInfo(m.client),
 			fetchConnection(m.client),
@@ -296,6 +300,9 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 
 	if active {
 		slog.Info("wifi tab activated")
+		if m.done == nil {
+			m.done = make(chan struct{})
+		}
 		return m, tea.Batch(
 			fetchInterfaceInfo(m.client),
 			fetchConnection(m.client),
@@ -306,6 +313,10 @@ func (m *Model) SetActive(active bool) (tui.Tab, tea.Cmd) {
 	}
 
 	slog.Info("wifi tab deactivated")
+	if m.done != nil {
+		close(m.done)
+		m.done = nil
+	}
 	return m, nil
 }
 
@@ -355,7 +366,7 @@ func (m *Model) View(width, height int) string {
 		body.WriteString("\n")
 	} else {
 		if !m.locationAuthed {
-			warn := m.theme.Value.Foreground(m.theme.Warning)
+			warn := m.theme.WarningText
 			body.WriteString(warn.Render("  ⚠ Location Services required for SSID visibility."))
 			body.WriteString("\n")
 			body.WriteString(warn.Render("  Grant access when prompted, or enable patch in:"))
@@ -449,11 +460,7 @@ func (m *Model) renderConnectOverlay(base string, width, height int) string {
 		return base
 	}
 
-	boxStyle := m.theme.Border.
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Active).
-		Padding(1, 3)
-	box := boxStyle.Render(content)
+	box := m.theme.Box.Padding(1, 3).Render(content)
 
 	boxWidth := lipgloss.Width(box)
 	boxHeight := lipgloss.Height(box)
@@ -510,13 +517,7 @@ func (m *Model) renderInterfaceHeader(b *strings.Builder, width int) {
 		name = "Unknown"
 	}
 
-	powerColor := theme.Error
-	powerText := "● Off"
-	if m.iface.PowerOn {
-		powerColor = theme.Active
-		powerText = "● On"
-	}
-	powerIndicator := theme.Value.Foreground(powerColor).Render(powerText)
+	powerIndicator := theme.PowerIndicator(m.iface.PowerOn)
 
 	b.WriteString(fmt.Sprintf("  %s %s    %s %s    %s %s",
 		theme.Label.Render("Interface:"),
@@ -582,14 +583,9 @@ func (m *Model) renderConnectionBlock(b *strings.Builder, width int) {
 
 	content := strings.Join(lines, "\n")
 
-	borderStyle := theme.Border.
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.Active).
-		Padding(0, 1)
-
 	b.WriteString("  " + theme.Label.Render("Current Connection"))
 	b.WriteString("\n")
-	boxed := borderStyle.Render(content)
+	boxed := theme.Box.Padding(0, 1).Render(content)
 	for _, line := range strings.Split(boxed, "\n") {
 		b.WriteString("  ")
 		b.WriteString(line)

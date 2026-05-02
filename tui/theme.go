@@ -19,11 +19,14 @@ type Theme struct {
 	BgDark   color.Color
 
 	// Pre-built styles (created once, reused everywhere).
-	Label     lipgloss.Style // Bold + Active foreground
-	Value     lipgloss.Style // Text foreground
-	Dim       lipgloss.Style // TextDim foreground
-	ErrorText lipgloss.Style // Error foreground
-	Help      lipgloss.Style // Inactive foreground
+	Label       lipgloss.Style // Bold + Active foreground
+	Value       lipgloss.Style // Text foreground
+	Dim         lipgloss.Style // TextDim foreground
+	ErrorText   lipgloss.Style // Error foreground
+	WarningText lipgloss.Style // Warning foreground
+	OnText      lipgloss.Style // Active foreground (e.g. "● On")
+	OffText     lipgloss.Style // Error foreground (e.g. "● Off")
+	Help        lipgloss.Style // Inactive foreground
 
 	// Table styles.
 	TableHeader lipgloss.Style // Bold + Active + padding
@@ -34,8 +37,12 @@ type Theme struct {
 	TabActive   lipgloss.Style
 	TabInactive lipgloss.Style
 
-	// Border style.
+	// Border style (foreground only — used as a base for table BorderStyle).
 	Border lipgloss.Style
+
+	// Box style (rounded border + Active border foreground + Text foreground,
+	// no padding). Re-apply .Padding(...) at the call site for variants.
+	Box lipgloss.Style
 
 	// Terminal-mode sub-theme used by the serial terminal modal.
 	Terminal *TerminalTheme
@@ -84,11 +91,14 @@ func NewTheme() *Theme {
 		TextDim:  textDim,
 		BgDark:   bgDark,
 
-		Label:     lipgloss.NewStyle().Bold(true).Foreground(active),
-		Value:     lipgloss.NewStyle().Foreground(text),
-		Dim:       lipgloss.NewStyle().Foreground(textDim),
-		ErrorText: lipgloss.NewStyle().Foreground(errColor),
-		Help:      lipgloss.NewStyle().Foreground(inactive),
+		Label:       lipgloss.NewStyle().Bold(true).Foreground(active),
+		Value:       lipgloss.NewStyle().Foreground(text),
+		Dim:         lipgloss.NewStyle().Foreground(textDim),
+		ErrorText:   lipgloss.NewStyle().Foreground(errColor),
+		WarningText: lipgloss.NewStyle().Foreground(warning),
+		OnText:      lipgloss.NewStyle().Foreground(active),
+		OffText:     lipgloss.NewStyle().Foreground(errColor),
+		Help:        lipgloss.NewStyle().Foreground(inactive),
 
 		TableHeader: lipgloss.NewStyle().Bold(true).Foreground(active).Padding(0, 1),
 		TableCell:   lipgloss.NewStyle().Foreground(text).Padding(0, 1),
@@ -109,8 +119,22 @@ func NewTheme() *Theme {
 
 		Border: lipgloss.NewStyle().Foreground(active),
 
+		Box: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(active).
+			Foreground(text),
+
 		Terminal: newTerminalTheme(),
 	}
+}
+
+// PowerIndicator returns a rendered "● On" or "● Off" string using the theme's
+// On/Off foreground colors. Used by tabs that show a power state in their header.
+func (t *Theme) PowerIndicator(on bool) string {
+	if on {
+		return t.OnText.Render("● On")
+	}
+	return t.OffText.Render("● Off")
 }
 
 // newTerminalTheme builds the amber-on-dark palette used by the serial
