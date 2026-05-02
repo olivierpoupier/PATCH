@@ -166,14 +166,14 @@ func (m *Model) renderHeader(width int) string {
 	}
 
 	rows := []string{
-		fieldLine(t,
-			kv{"Device", name},
-			kv{"Port", m.device.PortPath},
-			kv{"Baud", fmt.Sprintf("%d", m.device.Baud)},
+		components.FieldLine(t,
+			components.KV{Label: "Device", Value: name},
+			components.KV{Label: "Port", Value: m.device.PortPath},
+			components.KV{Label: "Baud", Value: fmt.Sprintf("%d", m.device.Baud)},
 		),
-		fieldLine(t,
-			kv{"VID:PID", vidPid},
-			kv{"Serial", orDash(m.device.SerialNumber)},
+		components.FieldLine(t,
+			components.KV{Label: "VID:PID", Value: vidPid},
+			components.KV{Label: "Serial", Value: components.OrDash(m.device.SerialNumber)},
 		),
 	}
 
@@ -183,9 +183,9 @@ func (m *Model) renderHeader(width int) string {
 
 	parts := []string{
 		sep,
-		indent(bannerLine, 2),
+		components.Indent(bannerLine, 2),
 		sep,
-		indent(strings.Join(rows, "\n"), 1),
+		components.Indent(strings.Join(rows, "\n"), 1),
 		sep,
 	}
 	return strings.Join(parts, "\n")
@@ -245,38 +245,4 @@ func (m *Model) renderFooter() string {
 		parts = append(parts, b.Keys+" "+b.Description)
 	}
 	return m.theme.Terminal.Help.Render("  " + strings.Join(parts, "  "))
-}
-
-// --- small helpers (duplicated from flipper; extract to tui/components if a
-// third device adds the same helpers) ---
-
-type kv struct {
-	label, value string
-}
-
-func fieldLine(t *tui.TerminalTheme, parts ...kv) string {
-	var segs []string
-	for _, p := range parts {
-		segs = append(segs, t.HeaderKey.Render(p.label+":")+" "+t.HeaderVal.Render(p.value))
-	}
-	return strings.Join(segs, "  ")
-}
-
-func indent(s string, n int) string {
-	if n <= 0 {
-		return s
-	}
-	pad := strings.Repeat(" ", n)
-	lines := strings.Split(s, "\n")
-	for i, ln := range lines {
-		lines[i] = pad + ln
-	}
-	return strings.Join(lines, "\n")
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
 }

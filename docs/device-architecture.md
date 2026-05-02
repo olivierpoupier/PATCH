@@ -267,7 +267,7 @@ Both existing implementations handle the same core set:
 | `ctrl+l` | `scrollback.Clear()` — wipes the visible terminal, not the device | `generic/generic.go:100-102`, `flipper/flipper.go:165-167` |
 | any other key | `serialterm.KeyToBytes(k)` → `session.Send(data)` | `generic/generic.go:104-111`, `flipper/flipper.go:171-178` |
 
-`KeyToBytes` is documented in [serial-terminal.md §4](serial-terminal.md#4-keytobytes-keygo) — it handles text, arrows as ANSI sequences, and `ctrl+X` as ASCII control codes.
+`KeyToBytes` is documented in [serial-terminal.md §5](serial-terminal.md#5-keytobytes-keysgo) — it handles text, arrows as ANSI sequences, and `ctrl+X` as ASCII control codes.
 
 **Guard before `Send`.** Both implementations check `!m.session.Active() || m.disconnected` before forwarding keys (`generic/generic.go:104`, `flipper/flipper.go:171`). This matters after `RxClosedMsg`: the read loop has exited, but the user may still type — we silently drop those keystrokes rather than crash on a nil transport.
 
