@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
 	github.com/bluetuith-org/bluetooth-classic v0.0.5
+	go.bug.st/serial v1.6.4
 	tinygo.org/x/bluetooth v0.14.0
 )
 
@@ -22,6 +23,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/creack/goselect v0.1.2 // indirect
 	github.com/cskr/pubsub/v2 v2.0.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/godbus/dbus/v5 v5.2.0 // indirect

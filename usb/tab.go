@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/olivierpoupier/patch/devices"
 	"github.com/olivierpoupier/patch/tui"
 	"github.com/olivierpoupier/patch/tui/components"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
+	"go.bug.st/serial/enumerator"
 )
 
 // Model is the USB tab's Bubbletea model.
@@ -109,6 +111,12 @@ func (m *Model) Update(msg tea.Msg) (tui.Tab, tea.Cmd) {
 			if vols := m.storageVolumesForCursor(); vols != nil {
 				return m, func() tea.Msg {
 					return tui.OpenFSViewMsg{Entries: vols, Source: "usb"}
+				}
+			}
+			if info := m.serialDeviceForCursor(); info != nil {
+				dev := *info
+				return m, func() tea.Msg {
+					return tui.OpenDeviceMsg{Device: dev, Source: "usb"}
 				}
 			}
 			m.toggleCollapseAtCursor()
@@ -374,6 +382,98 @@ func (m *Model) storageVolumesForCursor() []tui.VolumeEntry {
 	return out
 }
 
+// serialDeviceForCursor returns serial-port info for the device under the
+// cursor if one can be resolved via the system serial enumerator; otherwise
+// nil.
+func (m *Model) serialDeviceForCursor() *tui.SerialDeviceInfo {
+	var dev *USBDevice
+	if m.tableView {
+		if m.tableCursor < 0 || m.tableCursor >= len(m.tableRows) {
+			return nil
+		}
+		dev = m.tableRows[m.tableCursor].Device
+	} else {
+		if m.cursor < 0 || m.cursor >= len(m.nodes) {
+			return nil
+		}
+		node := m.nodes[m.cursor]
+		if node.IsHeader || node.IsBus {
+			return nil
+		}
+		dev = node.Device
+	}
+	if dev == nil {
+		return nil
+	}
+	return resolveSerialPort(dev)
+}
+
+// resolveSerialPort queries the OS serial enumerator and returns a
+// SerialDeviceInfo matching dev's VID/PID, preferring the port whose USB
+// serial number also matches. Returns nil if no matching port is found.
+func resolveSerialPort(dev *USBDevice) *tui.SerialDeviceInfo {
+	ports, err := enumerator.GetDetailedPortsList()
+	if err != nil || len(ports) == 0 {
+		return nil
+	}
+	wantVID := normalizeHex(dev.VendorID)
+	wantPID := normalizeHex(dev.ProductID)
+	wantSerial := strings.TrimSpace(dev.SerialNumber)
+
+	var best *enumerator.PortDetails
+	for _, p := range ports {
+		if !p.IsUSB {
+			continue
+		}
+		if normalizeHex(p.VID) != wantVID || normalizeHex(p.PID) != wantPID {
+			continue
+		}
+		// Prefer exact serial match when available.
+		if wantSerial != "" && strings.EqualFold(p.SerialNumber, wantSerial) {
+			best = p
+			break
+		}
+		if best == nil {
+			best = p
+		}
+	}
+	if best == nil {
+		return nil
+	}
+
+	info := tui.SerialDeviceInfo{
+		VID:          wantVID,
+		PID:          wantPID,
+		Name:         dev.Name,
+		VendorName:   dev.VendorName,
+		Product:      best.Product,
+		SerialNumber: best.SerialNumber,
+		PortPath:     best.Name,
+	}
+	if desc, ok := devices.Resolve(info); ok {
+		info.Baud = desc.Baud
+		info.ProfileKey = desc.Key
+		if info.Name == "" {
+			info.Name = best.Product
+		}
+		if info.Name == "" {
+			info.Name = desc.Name
+		}
+	} else {
+		info.Baud = 115200
+		if info.Name == "" {
+			info.Name = best.Product
+		}
+	}
+	return &info
+}
+
+func normalizeHex(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.TrimPrefix(s, "0x")
+	return s
+}
+
 func (m *Model) rebuildTableRows() {
 	m.tableRows = collectTableRows(m.groups)
 	if m.tableCursor >= len(m.tableRows) && len(m.tableRows) > 0 {
@@ -391,7 +491,14 @@ func (m *Model) renderTable(b *strings.Builder, width int) {
 		rowInfos = []rowData{{"No peripherals detected", "", "", "", ""}}
 	} else {
 		for _, r := range m.tableRows {
-			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, r.Storage, ""})
+			action := ""
+			if r.Device != nil && devices.HasCustom(tui.SerialDeviceInfo{
+				VID: r.Device.VendorID,
+				PID: r.Device.ProductID,
+			}) {
+				action = "⏎ serial"
+			}
+			rowInfos = append(rowInfos, rowData{r.Name, r.Type, r.Port, r.Storage, action})
 		}
 	}
 
