@@ -1,0 +1,26 @@
+{
+  "skill_name": "patch-add-device-view",
+  "evals": [
+    {
+      "id": 0,
+      "name": "feather-friendly-name",
+      "prompt": "hey, I just plugged in my new Adafruit Feather M4 Express and PATCH shows it as 'USB Serial Device' when I press enter on it in the USB tab. Can we make it show 'Adafruit Feather M4' with the right name in the terminal header? VID is 239a PID 8022. Nothing fancy, I just want the name to be right — I don't need any custom buttons or anything weird, plain serial terminal is fine.",
+      "expected_output": "Skill should route this to Step 1's 'friendly-name entry' path: add a single line to devices/generic/init.go with VID 239a, PID 8022, name 'Adafruit Feather M4', baud 115200. Should NOT launch the full interview. Should NOT create a new package.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "pico-custom-view",
+      "prompt": "I want to add support for the Raspberry Pi Pico (vid 2e8a pid 0005) in PATCH. When you open the serial terminal I'd love it to automatically query the MicroPython REPL for its unique ID and firmware info and show that at the top of the modal, similar to how the Flipper view shows firmware version and battery — but for the Pico the commands would be something like sending ctrl+c to interrupt then 'import sys; print(sys.implementation)' and parsing the output. I want a ctrl+r key to re-query, and a ctrl+b key that sends 0x02 which is the MicroPython soft reset. Standard amber-on-dark colors are fine, don't need anything custom there. How do we structure this?",
+      "expected_output": "Skill should identify this as a custom-package case (not a generic entry). Should conduct the interview covering identity (VID/PID match), layout (header fields for uid + firmware), core behavior (on-connect capture pattern, ctrl+r/ctrl+b keybindings, MicroPython command sequences). Should explicitly map the pattern onto Flipper's capture-window approach. Should assess complexity as 'Moderate' (not requiring phases) or possibly 'Complex' if the interactive REPL interrupt sequence introduces state machine concerns. Should NOT flag any cross-cutting concerns — nothing here touches shared code.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "saleae-binary-protocol",
+      "prompt": "I want to add a device view for my Saleae Logic 8 analyzer (VID 21a9 PID 1006). It talks a binary protocol over USB — raw samples, not ASCII text. I want the view to show a live logic-analyzer-style capture preview in the body area, with green for high and red for low signal states across 8 channels, and scrollable through the capture history. Also I want a keybinding to change the sample rate on the fly. This would let me do simple captures without launching Saleae's native desktop software. How do I do this in PATCH?",
+      "expected_output": "Skill should flag MULTIPLE cross-cutting / infeasibility concerns: (1) binary protocol is incompatible with the text-mode Scrollback; (2) live visualization with color-per-channel goes beyond the current body-rendering model; (3) likely needs a non-serial transport (USB bulk, not CDC) — the matcher is serial-enumerator-based; (4) potentially needs DeviceView interface extension for the custom body renderer. Should classify as 'Very complex' or 'Infeasible without foundational work' per Step 3. Should propose upstream work (new Transport, new body-render extension, or design doc) BEFORE scoping phases on the device view itself. Should NOT just start implementing.",
+      "files": []
+    }
+  ]
+}
