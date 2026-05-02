@@ -41,11 +41,8 @@ func (m *Model) View(width, height int) string {
 	}
 	bodyStr := body.String()
 
-	for i := 0; i < bodyHeight/2; i++ {
-		bodyStr += "\n"
-	}
-
 	m.scroll = m.scroll.SetSize(bodyWidth, bodyHeight)
+	m.scroll = m.scroll.SetBottomPadding(bodyHeight / 2)
 	m.scroll = m.scroll.SetContent(bodyStr)
 
 	activeCursor := m.cursor

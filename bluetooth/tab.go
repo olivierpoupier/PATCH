@@ -255,13 +255,11 @@ func (m *Model) View(width, height int) string {
 	var body strings.Builder
 	m.renderDeviceTable(&body, tableWidth)
 	bodyStr := body.String()
-	// Pad below the table so the last row can scroll up and reveal the bottom border.
-	for i := 0; i < bodyHeight/2; i++ {
-		bodyStr += "\n"
-	}
 
-	// Configure scrollable view.
+	// Configure scrollable view. Padding lets the last row scroll up off the
+	// bottom edge; the scrollbar excludes it from its range.
 	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetBottomPadding(bodyHeight / 2)
 	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep the cursor in view.

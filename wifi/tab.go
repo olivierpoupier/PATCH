@@ -382,13 +382,10 @@ func (m *Model) View(width, height int) string {
 	}
 	bodyStr := body.String()
 
-	// Pad below so the last row can scroll up and reveal the bottom border.
-	for i := 0; i < bodyHeight/2; i++ {
-		bodyStr += "\n"
-	}
-
-	// Configure scrollable body.
+	// Configure scrollable body. Padding lets the last row scroll up off the
+	// bottom edge; the scrollbar excludes it from its range.
 	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetBottomPadding(bodyHeight / 2)
 	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep the cursor visible.

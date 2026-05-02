@@ -214,12 +214,8 @@ func (m *Model) View(width, height int) string {
 	}
 	bodyStr := body.String()
 
-	// Pad below so the last row can scroll up.
-	for i := 0; i < bodyHeight/2; i++ {
-		bodyStr += "\n"
-	}
-
 	m.scroll = m.scroll.SetSize(tableWidth, bodyHeight)
+	m.scroll = m.scroll.SetBottomPadding(bodyHeight / 2)
 	m.scroll = m.scroll.SetContent(bodyStr)
 
 	// Auto-scroll to keep cursor visible.

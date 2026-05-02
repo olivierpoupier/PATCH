@@ -11,10 +11,13 @@ import (
 
 // ScrollableView wraps a viewport with a scrollbar overlay and auto-scroll.
 type ScrollableView struct {
-	viewport viewport.Model
-	theme    *tui.Theme
-	width    int
-	height   int
+	viewport      viewport.Model
+	theme         *tui.Theme
+	width         int
+	height        int
+	content       string
+	contentLines  int
+	bottomPadding int
 }
 
 // NewScrollableView creates a new scrollable view.
@@ -22,9 +25,36 @@ func NewScrollableView(theme *tui.Theme) ScrollableView {
 	return ScrollableView{theme: theme}
 }
 
-// SetContent sets the viewport's content string.
+// SetContent sets the viewport's content string. Bottom padding (if set via
+// SetBottomPadding) is appended internally; the scrollbar's range tracks only
+// the real content so the thumb reaches its extremes when the user is at the
+// first or last line.
 func (s ScrollableView) SetContent(content string) ScrollableView {
-	s.viewport.SetContent(content)
+	s.content = content
+	s.contentLines = strings.Count(content, "\n") + 1
+	return s.applyContent()
+}
+
+// SetBottomPadding sets a number of blank lines appended after the content so
+// the last real row can be scrolled up off the bottom edge (vim scrolloff).
+// The scrollbar excludes these lines from its calculations.
+func (s ScrollableView) SetBottomPadding(n int) ScrollableView {
+	if n < 0 {
+		n = 0
+	}
+	if s.bottomPadding == n {
+		return s
+	}
+	s.bottomPadding = n
+	return s.applyContent()
+}
+
+func (s ScrollableView) applyContent() ScrollableView {
+	padded := s.content
+	if s.bottomPadding > 0 {
+		padded += strings.Repeat("\n", s.bottomPadding)
+	}
+	s.viewport.SetContent(padded)
 	return s
 }
 
@@ -83,25 +113,31 @@ func (s ScrollableView) View() string {
 }
 
 // overlayScrollbar renders a scrollbar track on the right edge of the viewport.
+// The thumb is sized and positioned relative to the *real* content (excluding
+// any bottom padding added via SetBottomPadding), so the thumb reaches the
+// bottom of its range exactly when the last real line is on screen.
 func (s ScrollableView) overlayScrollbar(vpView string) string {
 	vpHeight := s.height
-	totalLines := s.viewport.TotalLineCount()
-	if totalLines <= vpHeight {
+	realLines := s.contentLines
+	if realLines <= vpHeight {
 		return vpView
 	}
 
 	trackStyle := lipgloss.NewStyle().Foreground(s.theme.Inactive)
 	thumbStyle := lipgloss.NewStyle().Foreground(s.theme.Active)
 
-	thumbSize := vpHeight * vpHeight / totalLines
+	thumbSize := vpHeight * vpHeight / realLines
 	if thumbSize < 1 {
 		thumbSize = 1
 	}
-	scrollable := totalLines - vpHeight
-	if scrollable < 0 {
-		scrollable = 0
+	if thumbSize > vpHeight {
+		thumbSize = vpHeight
 	}
+	scrollable := realLines - vpHeight
 	yOffset := s.viewport.YOffset()
+	if yOffset < 0 {
+		yOffset = 0
+	}
 	if yOffset > scrollable {
 		yOffset = scrollable
 	}
